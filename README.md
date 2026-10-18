@@ -4,6 +4,18 @@ Local location history for your AirTag items on macOS. TagTracker reads the plac
 
 **Experimental source release.** This is currently a command-line collector and browser dashboard, not a packaged or notarized Mac app. A native setup interface and the orange pin-over-stacked-maps icon are planned.
 
+## Screenshots and demo
+
+[Project website](https://danielyaa5.github.io/tagtracker/) · [Animated demo](site/assets/demo.gif)
+
+All screenshots and the demo use fictional items and observations at public landmarks.
+
+![Demo: select an item, change the date range, inspect a map pin, and fit all points](site/assets/demo.gif)
+
+| Items overview | Location history |
+| --- | --- |
+| [![Fictional items overview](site/assets/overview.png)](site/assets/overview.png) | [![Fictional backpack history](site/assets/history.png)](site/assets/history.png) |
+
 ## Features
 
 - History for selected Find My items, stored on your Mac.
@@ -82,6 +94,12 @@ Remove the three `io.tagtracker.*.plist` files from `~/Library/LaunchAgents` to 
 ## Development
 
 `make test` runs Go tests, scan lifecycle tests, and portable setup/map tests. See [CONTRIBUTING.md](CONTRIBUTING.md). Build and simulated-data checks do not establish live Find My compatibility on every Mac; verify the real permission, collection, database, and window-cleanup flow before distributing binaries.
+
+## Recreate the demo media
+
+`python3 scripts/demo_server.py` serves the real dashboard at http://127.0.0.1:8769/ using a temporary sample database. It does not read your configuration or open Find My. Stop it with Control-C to remove the sample data.
+
+To regenerate the screenshots and animated GIF, install Node.js, Playwright with Chromium, and ffmpeg, then run `node scripts/capture_demo.cjs`. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chrome/Chromium binary if needed. Capture runs headlessly and closes its browser and demo server afterward. The static website lives in `site/` and deploys through GitHub Pages on pushes to `main`.
 
 ## Credits and license
 
