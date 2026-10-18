@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Build an optional approximate-town lookup from GeoNames (CC BY 4.0)."""
-import io,os,sqlite3,sys,urllib.request,zipfile
+import io,os,sqlite3,sys,subprocess,zipfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'compat'))
 from runtime import DATA
 ROOT='https://download.geonames.org/export/dump/'
 def fetch(name):
- with urllib.request.urlopen(ROOT+name,timeout=120) as r:return r.read()
+ # Use macOS trust configuration, independent of the Python installation's CA bundle.
+ return subprocess.check_output(['/usr/bin/curl','--fail','--silent','--show-error','--location','--max-time','120',ROOT+name],timeout=125)
 def build():
  os.umask(0o077);DATA.mkdir(parents=True,exist_ok=True,mode=0o700)
  path=DATA/'places.sqlite';temp=DATA/'places.build.sqlite'
