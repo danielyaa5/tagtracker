@@ -1,0 +1,904 @@
+package findmy
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+)
+
+type Window struct {
+	PID      int    `json:"pid"`
+	WindowID int    `json:"windowID"`
+	Layer    int    `json:"layer"`
+	Title    string `json:"title"`
+	X        int    `json:"x"`
+	Y        int    `json:"y"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	OnScreen bool   `json:"onScreen"`
+}
+
+type TextLine struct {
+	Text       string  `json:"text"`
+	Confidence float64 `json:"confidence"`
+	X          int     `json:"x"`
+	Y          int     `json:"y"`
+	Width      int     `json:"width"`
+	Height     int     `json:"height"`
+}
+
+type Person struct {
+	Name           string `json:"name"`
+	Location       string `json:"location,omitempty"`
+	Staleness      string `json:"staleness,omitempty"`
+	Distance       string `json:"distance,omitempty"`
+	PreciseAddress string `json:"precise_address,omitempty"`
+	City           string `json:"city,omitempty"`
+	Region         string `json:"region,omitempty"`
+	PostalCode     string `json:"postal_code,omitempty"`
+}
+
+type Device struct {
+	Name           string `json:"name"`
+	Location       string `json:"location,omitempty"`
+	Staleness      string `json:"staleness,omitempty"`
+	Distance       string `json:"distance,omitempty"`
+	Battery        string `json:"battery,omitempty"`
+	PreciseAddress string `json:"precise_address,omitempty"`
+	City           string `json:"city,omitempty"`
+	Region         string `json:"region,omitempty"`
+	PostalCode     string `json:"postal_code,omitempty"`
+}
+
+type Item struct {
+	Name      string `json:"name"`
+	Location  string `json:"location,omitempty"`
+	Staleness string `json:"staleness,omitempty"`
+	Distance  string `json:"distance,omitempty"`
+	Battery   string `json:"battery,omitempty"`
+}
+
+func helper() string {
+	if env := os.Getenv("FINDMY_HELPER"); env != "" {
+		return env
+	}
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), "findmy-helper")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	if path, err := exec.LookPath("findmy-helper"); err == nil {
+		return path
+	}
+	return "findmy-helper"
+}
+
+func runHelper(args ...string) ([]byte, error) {
+	cmd := exec.Command(helper(), args...)
+	cmd.Stderr = os.Stderr
+	return cmd.Output()
+}
+
+type Permissions struct {
+	ScreenRecording bool `json:"screenRecording"`
+	Accessibility   bool `json:"accessibility"`
+}
+
+// CheckPermissions returns nil when both Screen Recording (for screencapture)
+// and Accessibility / event-posting (for CGEvent clicks) are granted to the
+// helper binary. It uses the helper's `permissions` subcommand, which probes
+// via SCShareableContent rather than trusting CGPreflight*Access alone — TCC
+// state is often stale for CLI binaries across rebuilds, and the preflight
+// calls return false-negatives that would otherwise cause screencapture to
+// hang or click to silently no-op.
+func CheckPermissions() (Permissions, error) {
+	out, err := runHelper("permissions")
+	if err != nil {
+		return Permissions{}, fmt.Errorf("helper permissions: %w", err)
+	}
+	var p Permissions
+	if err := json.Unmarshal(out, &p); err != nil {
+		return Permissions{}, fmt.Errorf("decode permissions: %w", err)
+	}
+	return p, nil
+}
+
+func requirePermissions(needClick bool) error {
+	p, err := CheckPermissions()
+	if err != nil {
+		return err
+	}
+	var missing []string
+	if !p.ScreenRecording {
+		missing = append(missing, "Screen Recording")
+	}
+	if needClick && !p.Accessibility {
+		missing = append(missing, "Accessibility")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"missing permission(s) for the host process: %s. Grant in System Settings → Privacy & Security → %s, then fully quit and relaunch this terminal (TCC is read once at process start).",
+		strings.Join(missing, ", "), strings.Join(missing, " / "),
+	)
+}
+
+func Activate() error {
+	script := `tell application "FindMy" to activate`
+	return exec.Command("osascript", "-e", script).Run()
+}
+
+func SwitchTab(name string) error {
+	ls := GetAppStrings()
+	script := fmt.Sprintf(
+		`tell application "System Events" to tell process "FindMy" to click menu item %q of menu %q of menu bar 1`,
+		name, ls.ViewMenu,
+	)
+	return exec.Command("osascript", "-e", script).Run()
+}
+
+func MainWindow() (*Window, error) {
+	ls := GetAppStrings()
+	out, err := runHelper("window", "--owner", ls.WindowOwner)
+	if err != nil {
+		return nil, fmt.Errorf("helper window: %w", err)
+	}
+	var wins []Window
+	if err := json.Unmarshal(out, &wins); err != nil {
+		return nil, fmt.Errorf("decode windows: %w", err)
+	}
+	for _, w := range wins {
+		if w.Layer == 0 && w.OnScreen && w.Height > 100 {
+			return &w, nil
+		}
+	}
+	return nil, fmt.Errorf("no visible %s window (open the app first)", ls.WindowOwner)
+}
+
+// Capture writes the FindMy window's content to dest using `screencapture -l`,
+// which targets the window by ID and captures actual content rather than the
+// screen rect. Region capture (`-R x,y,w,h`) would grab whatever is topmost at
+// those coordinates and pollute the OCR with terminal/desktop content when
+// FindMy isn't strictly frontmost.
+//
+// `-o` omits the window's drop shadow. Without it screencapture pads the
+// bitmap with ~34pt of shadow on every side, so the image is larger than the
+// window (e.g. 2184x1672 for a 1024x768 window on a 2x display). Every caller
+// that converts between image pixels and window points — the sidebar column
+// thresholds and the click mapping — assumes image (0,0) is window (0,0) and
+// that width ratio is the backing scale. The shadow breaks both assumptions:
+// it inflates the derived scale to 2.13 and offsets every mapped point by the
+// shadow inset. With `-o` the bitmap is exactly window size times backing
+// scale, and the arithmetic is exact.
+//
+// Capture fails with a friendly error when the display is asleep or the
+// window's backing store hasn't been populated yet (Catalyst quirk after
+// rapid focus changes). Both produce "could not create image from window"
+// or a tiny all-black PNG.
+func Capture(w *Window, dest string) error {
+	cmd := exec.Command("/usr/sbin/screencapture", "-x", "-o", "-l", fmt.Sprintf("%d", w.WindowID), "-t", "png", dest)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return diagnoseCaptureFailure(err)
+	}
+	if info, err := os.Stat(dest); err == nil && info.Size() < 5_000 {
+		return fmt.Errorf("captured image suspiciously small (%d bytes); display may be asleep — wake it with the keyboard", info.Size())
+	}
+	return nil
+}
+
+func diagnoseCaptureFailure(err error) error {
+	if isDisplayAsleep() {
+		return fmt.Errorf("display is asleep; wake it with the keyboard and re-run (%w)", err)
+	}
+	return fmt.Errorf("screencapture: %w (FindMy may not be fully painted; try again or click into FindMy first)", err)
+}
+
+func isDisplayAsleep() bool {
+	out, err := exec.Command("ioreg", "-c", "IODisplayWrangler").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), `"CurrentPowerState" = 1`) ||
+		strings.Contains(string(out), `"CurrentPowerState" = 0`)
+}
+
+func OCR(image string) ([]TextLine, error) {
+	out, err := runHelper("ocr", image)
+	if err != nil {
+		return nil, fmt.Errorf("helper ocr: %w", err)
+	}
+	var lines []TextLine
+	if err := json.Unmarshal(out, &lines); err != nil {
+		return nil, fmt.Errorf("decode ocr: %w", err)
+	}
+	return lines, nil
+}
+
+func Click(x, y int) error {
+	_, err := runHelper("click", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y))
+	return err
+}
+
+// wakeDisplay nudges the display awake by holding a 3-second user-activity
+// assertion. Needed for headless / closed-lid use with a dummy USB-C display:
+// the dummy plug enables clamshell mode but macOS still idle-sleeps it, and
+// WindowServer stops compositing when its only display is asleep — which
+// makes `screencapture -l <windowID>` return "could not create image from
+// window". We fire-and-forget; caffeinate self-terminates after 3s, which
+// covers PreparePeople's ~2s of activate+sleep before the capture.
+func wakeDisplay() {
+	cmd := exec.Command("caffeinate", "-u", "-t", "3")
+	if err := cmd.Start(); err == nil {
+		go func() { _ = cmd.Wait() }()
+	}
+}
+
+// PreparePeople activates FindMy, raises it strictly frontmost (so the
+// People sidebar is fully painted into the bitmap captured by `screencapture
+// -l`), and selects the People tab via the View menu. Returns the window's
+// metadata for capture targeting. Fails fast if the host process is missing
+// the Screen Recording grant, rather than letting screencapture hang.
+func PreparePeople() (*Window, error) {
+	return prepareTab(GetAppStrings().PeopleTab)
+}
+
+// PrepareDevices is the Devices-tab mirror of PreparePeople. Demitri's own
+// Apple devices (iPhone, iPad, Mac, AirPods, Apple Watch) live in this tab,
+// which the People tab cannot see — so this is the path for "where is my
+// phone" / "where are my AirPods" queries on his own iCloud.
+func PrepareDevices() (*Window, error) {
+	return prepareTab(GetAppStrings().DevicesTab)
+}
+
+// PrepareItems is the Items-tab mirror of PrepareDevices. AirTags, AirPods
+// cases, and third-party Find My network trackers live in this tab.
+func PrepareItems() (*Window, error) {
+	return prepareTab(GetAppStrings().ItemsTab)
+}
+
+func prepareTab(tab string) (*Window, error) {
+	if err := requirePermissions(false); err != nil {
+		return nil, err
+	}
+	wakeDisplay()
+	if err := Activate(); err != nil {
+		return nil, err
+	}
+	time.Sleep(900 * time.Millisecond)
+	frontScript := `tell application "System Events" to tell process "FindMy" to set frontmost to true`
+	_ = exec.Command("osascript", "-e", frontScript).Run()
+	_ = SwitchTab(tab)
+	time.Sleep(1100 * time.Millisecond)
+	return MainWindow()
+}
+
+// RequireSidebarVisible returns an error when the People/Devices/Items
+// segmented control is missing from the OCR output, which happens when the
+// user has hidden the sidebar (View → Hide Sidebar, or the toggle button).
+// Without this gate the sidebar parsers see only map content and can yield
+// nonsense rows pulled from map labels (place names, road names) rather than
+// actual people or devices.
+func RequireSidebarVisible(lines []TextLine, sidebarRightPx int, tabName string) error {
+	seenPeople := false
+	seenOtherTab := false
+	for _, l := range lines {
+		txt := strings.TrimSpace(l.Text)
+		isPeople, isTab := sidebarTabText(txt)
+		if !isTab {
+			continue
+		}
+		if l.Y > 220 {
+			continue
+		}
+		if l.X+l.Width/2 >= sidebarRightPx {
+			continue
+		}
+		if isPeople {
+			seenPeople = true
+		} else {
+			seenOtherTab = true
+		}
+	}
+	if seenPeople && seenOtherTab {
+		return nil
+	}
+	return fmt.Errorf("Find My sidebar is not visible. Open the sidebar, select %s, then re-run findmy", tabName)
+}
+
+// ParsePeople groups OCR lines from the People sidebar into Person records.
+// The sidebar layout (in image pixels) has three bands:
+//
+//	avatar:     x ≈   0–200   (round photo with initials — OCR noise lives here)
+//	text:       x ≈ 240–550   (name and location/staleness)
+//	distance:   x ≈ 580–700   ("1,971 mi" right-aligned to row top)
+//
+// We discard the avatar band entirely (it produces low-confidence fragments
+// like "Is" or "rk" from initials and shadows that otherwise get misread as
+// person names), then walk the remaining lines top-to-bottom. The sidebar's
+// right edge and the y-cutoff for the first row are derived from the OCR'd
+// People/Devices/Items tab-pill positions (see detectSidebarRight,
+// detectSidebarRowStartY) rather than fixed at scaled-point constants — the
+// dynamic bounds handle compact Catalyst layouts where map labels would
+// otherwise bleed into the fixed cutoff.
+func ParsePeople(lines []TextLine, sidebarRightPx, textColMinPx int) []Person {
+	rows := make([]TextLine, 0, len(lines))
+	effectiveSidebarRightPx := detectSidebarRight(lines, sidebarRightPx)
+	rowStartY := detectSidebarRowStartY(lines, effectiveSidebarRightPx)
+	for _, l := range lines {
+		if strings.TrimSpace(l.Text) == "" {
+			continue
+		}
+		if l.X+l.Width/2 >= effectiveSidebarRightPx {
+			continue
+		}
+		if l.Y < rowStartY {
+			continue
+		}
+		if l.X < textColMinPx {
+			continue
+		}
+		rows = append(rows, l)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Y == rows[j].Y {
+			return rows[i].X < rows[j].X
+		}
+		return rows[i].Y < rows[j].Y
+	})
+	rows = mergeWrappedContinuations(rows)
+
+	skip := GetAppStrings().SkipWords()
+
+	people := make([]Person, 0)
+	var current *Person
+	for _, l := range rows {
+		txt := strings.TrimSpace(l.Text)
+		if skip[txt] {
+			continue
+		}
+		if isDistance(txt) {
+			if current != nil {
+				current.Distance = txt
+			}
+			continue
+		}
+		if current == nil || current.Location != "" {
+			people = append(people, Person{Name: txt})
+			current = &people[len(people)-1]
+			continue
+		}
+		loc, stale := splitLocationStaleness(txt)
+		current.Location = loc
+		current.Staleness = stale
+	}
+	return people
+}
+
+// detectSidebarRight returns the narrower of (the observed right edge of
+// the People/Devices/Items segmented control + 40px padding) and the
+// scaled-point fallback, so that on compact Catalyst layouts the cutoff
+// shrinks to exclude map labels that start near x≈350px. Returns the
+// fallback unchanged when no tab pill is OCR'd.
+func detectSidebarRight(lines []TextLine, fallbackRightPx int) int {
+	maxTabRight := 0
+	for _, l := range lines {
+		txt := strings.TrimSpace(l.Text)
+		if _, isTab := sidebarTabText(txt); !isTab {
+			continue
+		}
+		if l.Y > 220 {
+			continue
+		}
+		if r := l.X + l.Width; r > maxTabRight {
+			maxTabRight = r
+		}
+	}
+	if maxTabRight == 0 {
+		return fallbackRightPx
+	}
+	observed := maxTabRight + 40
+	if observed < fallbackRightPx {
+		return observed
+	}
+	return fallbackRightPx
+}
+
+// detectSidebarRowStartY returns the y-coordinate (image pixels) below
+// which actual sidebar rows begin, computed as the bottom of the tab-pill
+// band plus 12px padding. The 120px fallback is effectively unreachable
+// because callers gate on RequireSidebarVisible — if there's no tab pill,
+// parsing is short-circuited before this is consulted.
+func detectSidebarRowStartY(lines []TextLine, sidebarRightPx int) int {
+	const fallbackY = 120
+	bottom := 0
+	for _, l := range lines {
+		txt := strings.TrimSpace(l.Text)
+		if _, isTab := sidebarTabText(txt); !isTab {
+			continue
+		}
+		if l.X+l.Width/2 >= sidebarRightPx {
+			continue
+		}
+		if l.Y > 220 {
+			continue
+		}
+		if b := l.Y + l.Height; b > bottom {
+			bottom = b
+		}
+	}
+	if bottom == 0 {
+		return fallbackY
+	}
+	return bottom + 12
+}
+
+func sidebarTabText(txt string) (isPeople, isTab bool) {
+	ls := GetAppStrings()
+	switch txt {
+	case "People", ls.PeopleTab:
+		return true, true
+	case "Devices", "Items", ls.DevicesTab, ls.ItemsTab:
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+// mergeWrappedContinuations folds OCR lines that Vision split across two
+// visual rows because of a long "City, ST • 2 min. ago" string. The
+// telltale: the previous row contains the " • " separator and the next row
+// is within ~35px below it and looks like a relative-time suffix.
+func mergeWrappedContinuations(rows []TextLine) []TextLine {
+	out := make([]TextLine, 0, len(rows))
+	for _, l := range rows {
+		if n := len(out); n > 0 {
+			prev := &out[n-1]
+			gap := l.Y - (prev.Y + prev.Height)
+			if gap < 12 && strings.Contains(prev.Text, "•") && looksLikeTimeSuffix(l.Text) {
+				prev.Text = prev.Text + " " + strings.TrimSpace(l.Text)
+				if l.Y+l.Height > prev.Y+prev.Height {
+					prev.Height = (l.Y + l.Height) - prev.Y
+				}
+				continue
+			}
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+func looksLikeTimeSuffix(s string) bool {
+	t := strings.ToLower(strings.TrimSpace(s))
+	for _, pattern := range GetAppStrings().TimeSuffixes {
+		if t == pattern || strings.HasSuffix(t, pattern) || strings.Contains(t, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func isDistance(s string) bool {
+	s = strings.ToLower(s)
+	for _, suffix := range []string{" mi", " km", " ft", " m", " yd"} {
+		if strings.HasSuffix(s, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitLocationStaleness parses a "<location> • <staleness>" sidebar line into
+// its two halves. One wrinkle: when the device is the Mac the user is
+// currently running on, FindMy.app puts a "This Mac" badge in the location
+// slot instead of an actual place ("This Mac • No location found"). The badge
+// is not a location, so when the left half is one of the known "This <device>"
+// labels we treat the right half as the location and drop the badge.
+func splitLocationStaleness(s string) (location, staleness string) {
+	idx := strings.Index(s, "•")
+	if idx < 0 {
+		return s, ""
+	}
+	left := strings.TrimSpace(s[:idx])
+	right := strings.TrimSpace(s[idx+len("•"):])
+	if isThisDeviceLabel(left) {
+		return right, ""
+	}
+	return left, right
+}
+
+// isThisDeviceLabel reports whether s is the "This Mac" / "This iPhone" /
+// "This iPad" badge FindMy.app shows on the device the user is currently
+// signed into. The label is English-only here; other locales translate it
+// (e.g. "Ce Mac" in French) but those strings are not yet catalogued.
+func isThisDeviceLabel(s string) bool {
+	switch s {
+	case "This Mac", "This iPhone", "This iPad", "This Apple Watch":
+		return true
+	}
+	return false
+}
+
+// ParseDevices groups OCR lines from the Devices sidebar into Device records.
+// Layout mirrors People (avatar/icon column on left, text band middle, distance
+// right) but rows can also carry a battery indicator OCR'd as "82%" or similar.
+// Battery percentages are extracted into the Battery field; everything else
+// follows the same row-walk logic as ParsePeople.
+func ParseDevices(lines []TextLine, sidebarRightPx, textColMinPx int) []Device {
+	rows := make([]TextLine, 0, len(lines))
+	effectiveSidebarRightPx := detectSidebarRight(lines, sidebarRightPx)
+	rowStartY := detectSidebarRowStartY(lines, effectiveSidebarRightPx)
+	for _, l := range lines {
+		if strings.TrimSpace(l.Text) == "" {
+			continue
+		}
+		if l.X+l.Width/2 >= effectiveSidebarRightPx {
+			continue
+		}
+		if l.Y < rowStartY {
+			continue
+		}
+		if l.X < textColMinPx {
+			continue
+		}
+		rows = append(rows, l)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Y == rows[j].Y {
+			return rows[i].X < rows[j].X
+		}
+		return rows[i].Y < rows[j].Y
+	})
+	rows = mergeWrappedContinuations(rows)
+
+	skip := GetAppStrings().SkipWords()
+
+	devices := make([]Device, 0)
+	var current *Device
+	for _, l := range rows {
+		txt := strings.TrimSpace(l.Text)
+		if skip[txt] {
+			continue
+		}
+		if isDistance(txt) {
+			if current != nil {
+				current.Distance = txt
+			}
+			continue
+		}
+		if isBattery(txt) {
+			if current != nil {
+				current.Battery = txt
+			}
+			continue
+		}
+		if current == nil || current.Location != "" {
+			devices = append(devices, Device{Name: txt})
+			current = &devices[len(devices)-1]
+			continue
+		}
+		loc, stale := splitLocationStaleness(txt)
+		current.Location = loc
+		current.Staleness = stale
+	}
+	return devices
+}
+
+// ParseItems groups OCR lines from the Items sidebar into Item records.
+// The layout mirrors Devices (icon column on left, text band middle, distance
+// right) and can also carry a battery indicator OCR'd as "82%" or similar.
+func ParseItems(lines []TextLine, sidebarRightPx, textColMinPx int) []Item {
+	rows := make([]TextLine, 0, len(lines))
+	effectiveSidebarRightPx := detectSidebarRight(lines, sidebarRightPx)
+	rowStartY := detectSidebarRowStartY(lines, effectiveSidebarRightPx)
+	for _, l := range lines {
+		if strings.TrimSpace(l.Text) == "" {
+			continue
+		}
+		if l.X+l.Width/2 >= effectiveSidebarRightPx {
+			continue
+		}
+		if l.Y < rowStartY {
+			continue
+		}
+		if l.X < textColMinPx {
+			continue
+		}
+		rows = append(rows, l)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Y == rows[j].Y {
+			return rows[i].X < rows[j].X
+		}
+		return rows[i].Y < rows[j].Y
+	})
+	rows = mergeWrappedContinuations(rows)
+
+	skip := GetAppStrings().SkipWords()
+
+	items := make([]Item, 0)
+	var current *Item
+	for _, l := range rows {
+		txt := strings.TrimSpace(l.Text)
+		if skip[txt] {
+			continue
+		}
+		if isDistance(txt) {
+			if current != nil {
+				current.Distance = txt
+			}
+			continue
+		}
+		if isBattery(txt) {
+			if current != nil {
+				current.Battery = txt
+			}
+			continue
+		}
+		if current == nil || current.Location != "" {
+			items = append(items, Item{Name: txt})
+			current = &items[len(items)-1]
+			continue
+		}
+		loc, stale := splitLocationStaleness(txt)
+		current.Location = loc
+		current.Staleness = stale
+	}
+	return items
+}
+
+// isBattery recognizes FindMy.app's battery-indicator OCR fragments. The
+// Devices tab renders a battery glyph followed by a percentage like "82%";
+// Vision usually picks up just "82%" or "82 %". A bare "Offline" or "No
+// location" is left to fall through and become the device's Status row.
+func isBattery(s string) bool {
+	t := strings.TrimSpace(strings.ReplaceAll(s, " ", ""))
+	if !strings.HasSuffix(t, "%") {
+		return false
+	}
+	num := strings.TrimSuffix(t, "%")
+	if num == "" {
+		return false
+	}
+	for _, r := range num {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+var cityRegionPostalRE = regexp.MustCompile(`^([A-Za-z .'-]+),\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?$`)
+
+// detailPaneColumnTolerancePx is how far an address line's left edge may sit
+// from the header's before it stops being part of the same pane. Vision
+// reports left edges within a couple of pixels for genuinely left-aligned
+// text; 40px leaves room for a 2x display's rounding without admitting a
+// neighbouring map label.
+const detailPaneColumnTolerancePx = 40
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+// ErrNoDetailPane reports that the right-hand region of the window is not a
+// detail pane. macOS 26 replaced FindMy's split view with a floating sidebar
+// over a full-bleed map, so a row click no longer reveals a pane containing
+// the selected entity's street address; the region to the right of the
+// sidebar is map canvas.
+//
+// This must be a hard error rather than a silent empty result. Before the
+// guard existed, ExtractDetailPaneAddress happily OCR'd whatever sat right of
+// the sidebar and returned it as precise_address — on this layout that is map
+// furniture, so `findmy person X --zoom` reported place names and the map's
+// own "3D" control as the person's street address. Wrong location data
+// presented as precise is worse than no data.
+var ErrNoDetailPane = errors.New("no FindMy detail pane found right of the sidebar")
+
+// ExtractDetailPaneAddress filters OCR lines to FindMy's right-side detail
+// pane and extracts the address rendered below the selected person/device
+// header. US addresses are split into city/region/postal when possible;
+// otherwise the visible address lines are returned as a single precise address.
+//
+// entityName is the name of the row that was clicked. The detail pane always
+// headers with it, and a map never renders it, so requiring the header to
+// match is the language-neutral proof that a detail pane is really on screen.
+// A returned ErrNoDetailPane means the layout has no detail pane at all;
+// a nil error with an empty precise means the pane is there but carries no
+// address (offline device, "No location found").
+func ExtractDetailPaneAddress(lines []TextLine, sidebarRightPx int, entityName string) (precise, city, region, postal string, err error) {
+	rightPane := make([]TextLine, 0, len(lines))
+	for _, l := range lines {
+		txt := strings.TrimSpace(l.Text)
+		if txt == "" {
+			continue
+		}
+		if l.X <= sidebarRightPx+20 {
+			continue
+		}
+		rightPane = append(rightPane, l)
+	}
+	sort.SliceStable(rightPane, func(i, j int) bool {
+		if rightPane[i].Y == rightPane[j].Y {
+			return rightPane[i].X < rightPane[j].X
+		}
+		return rightPane[i].Y < rightPane[j].Y
+	})
+
+	addressLines := make([]string, 0, 3)
+	seenHeader := false
+	headerX := 0
+	for _, l := range rightPane {
+		txt := normalizeDetailPaneText(l.Text)
+		if txt == "" {
+			continue
+		}
+		if skipDetailPaneText(txt) {
+			if len(addressLines) > 0 {
+				break
+			}
+			continue
+		}
+		if !seenHeader {
+			// Only the entity's own name opens the pane. Anything else here
+			// is map canvas, and consuming it as a header is what let map
+			// labels through as addresses.
+			if !matchesEntityHeader(txt, entityName) {
+				continue
+			}
+			seenHeader = true
+			headerX = l.X
+			continue
+		}
+		// Address lines are left-aligned under the header in a real pane.
+		// Map labels are scattered across the canvas, so an X far from the
+		// header's is map furniture no matter how much it reads like a
+		// street ("WAREHAM LN", "BULL RUN RD").
+		if abs(l.X-headerX) > detailPaneColumnTolerancePx {
+			break
+		}
+		// The first address line is held to the same shape test as the rest.
+		// Without this a pane whose address had not painted yet would adopt
+		// the next unrelated label.
+		if !looksLikeAddressLine(txt) {
+			break
+		}
+		addressLines = append(addressLines, txt)
+		if _, _, _, ok := parseCityRegionPostal(txt); ok {
+			break
+		}
+		if len(addressLines) >= 4 {
+			break
+		}
+	}
+
+	if !seenHeader {
+		return "", "", "", "", ErrNoDetailPane
+	}
+	if len(addressLines) == 0 {
+		return "", "", "", "", nil
+	}
+	for i, line := range addressLines {
+		if c, r, p, ok := parseCityRegionPostal(line); ok {
+			if i == 0 {
+				return line, c, r, p, nil
+			}
+			return strings.Join(addressLines[:i], ", "), c, r, p, nil
+		}
+	}
+	return strings.Join(addressLines, ", "), "", "", "", nil
+}
+
+// matchesEntityHeader reports whether an OCR line is the detail pane's header
+// for entityName. It is deliberately tolerant: Vision runs with language
+// correction off (it mangles proper nouns otherwise) but still drops or
+// garbles the occasional character, and the header may be truncated with an
+// ellipsis when the pane is narrow. Half the name's words matching is enough
+// to tell a header apart from a map label, which shares no words at all.
+func matchesEntityHeader(line, entityName string) bool {
+	name := strings.ToLower(normalizeDetailPaneText(entityName))
+	candidate := strings.ToLower(normalizeDetailPaneText(line))
+	if name == "" || candidate == "" {
+		return false
+	}
+	if candidate == name || strings.Contains(candidate, name) || strings.Contains(name, candidate) {
+		return true
+	}
+	nameWords := strings.Fields(name)
+	if len(nameWords) == 0 {
+		return false
+	}
+	candidateWords := make(map[string]bool, 8)
+	for _, w := range strings.Fields(candidate) {
+		candidateWords[w] = true
+	}
+	hits := 0
+	for _, w := range nameWords {
+		if candidateWords[w] {
+			hits++
+		}
+	}
+	return hits*2 >= len(nameWords)
+}
+
+func normalizeDetailPaneText(s string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+}
+
+func parseCityRegionPostal(s string) (city, region, postal string, ok bool) {
+	m := cityRegionPostalRE.FindStringSubmatch(strings.TrimSpace(s))
+	if m == nil {
+		return "", "", "", false
+	}
+	return m[1], m[2], m[3], true
+}
+
+var streetWords = map[string]bool{
+	"street": true, "st": true, "avenue": true, "ave": true,
+	"road": true, "rd": true, "drive": true, "dr": true,
+	"lane": true, "ln": true, "way": true, "place": true,
+	"pl": true, "court": true, "ct": true, "boulevard": true, "blvd": true,
+}
+
+func looksLikeAddressLine(s string) bool {
+	// FindMy joins a coarse location to its staleness with a bullet
+	// ("Winston-Salem, NC • Now"). A street address never contains one, and
+	// this is exactly the text the redesigned map callout renders under the
+	// name — the coarse reading we already have, not a precise address.
+	if strings.ContainsAny(s, "•·") {
+		return false
+	}
+	if _, _, _, ok := parseCityRegionPostal(s); ok {
+		return true
+	}
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	// Whole words only. Substring matching treated any word containing "st",
+	// "dr", "ln" and friends as a street — "Winston-Salem" and "Redmond" both
+	// qualified — which is how map labels passed for addresses.
+	for _, word := range strings.Fields(strings.ToLower(s)) {
+		if streetWords[strings.Trim(word, ".,'\"()")] {
+			return true
+		}
+	}
+	return false
+}
+
+func skipDetailPaneText(s string) bool {
+	t := strings.ToLower(strings.TrimSpace(s))
+	if t == "" {
+		return true
+	}
+	for _, button := range GetAppStrings().DetailButtons() {
+		if t == strings.ToLower(button) {
+			return true
+		}
+	}
+	if strings.Contains(t, " updated ") || strings.HasPrefix(t, "updated ") || strings.Contains(t, " away") {
+		return true
+	}
+	if strings.HasPrefix(t, "battery") || isBattery(t) {
+		return true
+	}
+	for _, section := range []string{"notifications", "notify when left behind", "no location found", "offline"} {
+		if t == section {
+			return true
+		}
+	}
+	return false
+}

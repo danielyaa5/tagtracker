@@ -1,0 +1,6 @@
+#!/opt/homebrew/bin/python3
+"""Defer the CLI's early wake to the idle-authorized, process-bound guard."""
+import os,sys
+if sys.argv[1:]==['-u','-t','3']:
+ sys.exit(0)
+os.execv('/usr/bin/caffeinate',['/usr/bin/caffeinate',*sys.argv[1:]])

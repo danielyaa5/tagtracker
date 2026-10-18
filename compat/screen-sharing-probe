@@ -1,0 +1,10 @@
+#!/bin/sh
+umask 077
+state="${TAGTRACKER_DATA_DIR:-$HOME/Library/Application Support/TagTracker}/screen-sharing-status.json"
+checked=$(/bin/date +%s)
+/usr/sbin/netstat -anv -p tcp | /usr/bin/awk -v at="$checked" '
+/Active Internet/ { valid=1 }
+$1 ~ /^tcp/ && $6 == "ESTABLISHED" && ($4 ~ /[.]5900$/ || $0 ~ /screensharingd:/) { connected=1 }
+END { printf "{\"checked_at\":%s,\"valid\":%s,\"connected\":%s}\n", at, valid ? "true":"false", connected ? "true":"false" }
+' > "$state.tmp"
+/bin/mv "$state.tmp" "$state"

@@ -1,0 +1,94 @@
+#!/usr/bin/python3
+"""Collect complete Items rows across the macOS 27 sidebar for findmy-cli."""
+import sys,os,subprocess,json,pathlib,tempfile,struct,time,re
+from idle_control import check,acknowledge_automation,finish,read,cleanup_window,fail_scan,record_status,visible_window,remember_window,IdlePause
+from runtime import BASE as base, DATA
+real=str(base/'bin/findmy-helper')
+config=json.loads((DATA/'item-names.json').read_text())
+expected=set(config['expected'])
+aliases=config['aliases']
+canonical={name.casefold():name for name in expected}
+canonical.update({alias.casefold():name for alias,name in aliases.items()})
+args=sys.argv[1:]
+if not (len(args)==2 and args[0]=='ocr' and pathlib.Path(args[1]).name=='items.png'):
+ os.execv(real,[real,*args])
+def run(*a):
+ check()
+ result=subprocess.check_output(a,text=True,timeout=40)
+ if len(a)>1 and a[1]=='scroll':acknowledge_automation()
+ return result
+def same_page(previous,current):
+ # Relative ages and locations can change without any scrolling.
+ # Require recognized names at unchanged positions across two scroll attempts.
+ return bool(current) and previous is not None and len(previous)==len(current) and all(a[0]==b[0] and abs(a[1]-b[1])<=3 for a,b in zip(previous,current))
+def line(text,x,y,width=160): return dict(text=text,confidence=1.0,x=x,y=y,width=width,height=20)
+try:
+ if not (DATA/'tab-selected').exists() or time.time()-(DATA/'tab-selected').stat().st_mtime>90:
+  # A paused scan skips tab selection; that is a pause, not a failed collection.
+  if read().get('mode')!='scanning':raise IdlePause('Scan paused before the Items tab was selected')
+  raise RuntimeError('Items tab was not selected successfully; refusing to record another tab')
+ wins=json.loads(run(real,'window','--owner','Find My'))
+ w=visible_window(wins)
+ if not w:raise RuntimeError('No visible Find My window to collect from')
+ remember_window(w)
+ sx,sy=w['x']+160,w['y']+w['height']*.60
+ records={}; raw_pages=[]
+ for sweep in range(3):
+  sweep_names=set()
+  run(real,'scroll',str(sx),str(sy),'200')
+  time.sleep(.5)
+  previous=None; stable=0
+  with tempfile.TemporaryDirectory(prefix='airtag-collect-') as tmp:
+   for page in range(35):
+    img=pathlib.Path(tmp)/'page.png'
+    run('/usr/sbin/screencapture','-x','-o','-l',str(w['windowID']),'-t','png',str(img))
+    scale=struct.unpack('>I',img.read_bytes()[16:20])[0]/w['width']
+    raw=json.loads(run(real,'ocr',str(img)));raw_pages.append(raw)
+    candidates=sorted([l for l in raw if 48*scale<=l['x']<240*scale and l['x']+l['width']/2<260*scale and 140*scale<l['y']<(w['height']-10)*scale],key=lambda l:l['y'])
+    signature=tuple((canonical[l['text'].strip().casefold()],l['y']/scale) for l in candidates if l['text'].strip().casefold() in canonical)
+    stable=stable+1 if same_page(previous,signature) else 0
+    previous=signature
+    i=0
+    while i+1<len(candidates):
+     a,b=candidates[i],candidates[i+1]
+     name=canonical.get(a['text'].strip().casefold());location=b['text'].strip()
+     if re.search(r'\s*[|]\s*Nearby$',location):location=re.sub(r'\s*[|]\s*Nearby$','',location)+' • Age unavailable'
+     if name in expected and (b['y']-a['y'])/scale<32 and ('•' in location or '·' in location or re.search(r'No location|Not found|Offline',location,re.I)) and not ('•' in name or '·' in name):
+      consumed=2
+      if i+2<len(candidates):
+       c=candidates[i+2]
+       if (c['y']-b['y'])/scale<22 and re.fullmatch(r'(?:min\.?|hr\.?|hours?|days?|weeks?)\s+ago',c['text'].strip(),re.I):
+        location+=' '+c['text'].strip();consumed=3
+      records[name]=location.replace('·','•');sweep_names.add(name);i+=consumed
+     else:i+=1
+    if stable>=2 or expected.issubset(sweep_names):break
+    run(real,'scroll',str(sx),str(sy),'-12');time.sleep(.45)
+   else:raise RuntimeError('Could not verify the bottom of the Items list')
+  run(real,'scroll',str(sx),str(sy),'200')
+  if sweep>=1 and expected.issubset(records):break
+ missing=sorted(expected-set(records))
+ if missing:print('Partial collection; missing: '+', '.join(missing),file=sys.stderr)
+ if not records:raise RuntimeError('No complete AirTag rows found; nothing recorded')
+ # Normalize measured rows into the existing parser's coordinate convention.
+ out=[line('People',90,30,80),line('Devices',200,30,90),line('Items',330,30,80)]
+ for i,(name,loc) in enumerate(records.items()):
+  out.extend([line(name,180,130+i*80,220),line(loc,180,160+i*80,220)])
+ diag={'captured_at':time.time(),'count':len(records),'records':records,'pages':raw_pages}
+ p=DATA/'last-collection.json';p.write_text(json.dumps(diag,ensure_ascii=False));p.chmod(0o600)
+ check()
+ cleanup_window()
+ finish()
+ record_status(ok=not missing,count=len(records),missing=missing)
+ print(json.dumps(out,ensure_ascii=False))
+except IdlePause as e:
+ cleanup_window()
+ print(str(e),file=sys.stderr);sys.exit(1)
+except Exception as e:
+ # Keep the latest failed OCR evidence; previously only successes were retained.
+ if 'raw_pages' in locals():
+  try:
+   p=DATA/'last-failed-collection.json'
+   p.write_text(json.dumps({'captured_at':time.time(),'error':str(e),'records':records,'pages':raw_pages},ensure_ascii=False));p.chmod(0o600)
+  except OSError:pass
+ fail_scan(e)
+ print(time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())+' '+str(e),file=sys.stderr);sys.exit(1)

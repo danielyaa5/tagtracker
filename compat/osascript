@@ -1,0 +1,56 @@
+#!/usr/bin/python3
+"""Compatibility adapter: use granted native screen control for Find My tabs."""
+import sys, subprocess, json, pathlib, tempfile, time, struct, os
+from idle_control import begin,check,acknowledge_automation,keep_display_awake,cleanup_window,fail_scan,find_my_windows,visible_window,remember_window,IdlePause
+from runtime import BASE as base, DATA
+helper=str(base/'bin/findmy-helper')
+args=sys.argv[1:]
+script=args[1] if len(args)==2 and args[0]=='-e' else ''
+def run(*args):
+ check()
+ result=subprocess.check_output(args, text=True, timeout=35)
+ if len(args)>1 and args[1]=='click':acknowledge_automation()
+ return result
+def activate():
+ begin(os.getppid())
+ keep_display_awake()
+ check()
+ subprocess.run(['/usr/bin/open','-a','/System/Applications/FindMy.app'],check=True,timeout=15)
+ acknowledge_automation()
+ # A cold launch can take a few seconds to show its window; record it as soon as it appears.
+ for _ in range(20):
+  window=visible_window(find_my_windows())
+  if window:remember_window(window);break
+  time.sleep(.25)
+ check()
+try:
+ if script in ['tell application "FindMy" to activate','tell application "System Events" to tell process "FindMy" to set frontmost to true']:
+  activate()
+ elif script == 'tell application "System Events" to tell process "FindMy" to click menu item "Items" of menu "View" of menu bar 1':
+  (DATA/'tab-selected').unlink(missing_ok=True)
+  activate()
+  wins=json.loads(run(helper,'window','--owner','Find My'))
+  w=visible_window(wins)
+  if not w:raise RuntimeError('No visible Find My window to select the Items tab in')
+  remember_window(w)
+  with tempfile.TemporaryDirectory(prefix='airtag-tab-') as tmp:
+   image=pathlib.Path(tmp)/'window.png'
+   run('/usr/sbin/screencapture','-x','-o','-l',str(w['windowID']),'-t','png',str(image))
+   width=struct.unpack('>I',image.read_bytes()[16:20])[0]
+   scale=width/w['width']
+   lines=json.loads(run(helper,'ocr',str(image)))
+   tabs=[l for l in lines if l['text'].strip()=='Items' and l['y']<85*scale and l['x']<400*scale]
+   if len(tabs)!=1: raise RuntimeError('Cannot uniquely locate the Items tab; refusing an unverified click')
+   t=tabs[0]
+   run(helper,'click',str(w['x']+(t['x']+t['width']/2)/scale),str(w['y']+(t['y']+t['height']/2)/scale))
+  (DATA/'tab-selected').touch()
+ else:
+  sys.exit(subprocess.call(['/usr/bin/osascript',*args]))
+except IdlePause as e:
+ cleanup_window()
+ print(str(e),file=sys.stderr);sys.exit(1)
+except Exception as e:
+ fail_scan(e)
+ with (DATA/'automation.err').open('a') as f: f.write(time.strftime('%Y-%m-%dT%H:%M:%SZ ',time.gmtime())+str(e)+'\n')
+ print(str(e),file=sys.stderr)
+ sys.exit(1)

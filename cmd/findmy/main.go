@@ -1,0 +1,1057 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/oshahine/findmy-cli/internal/findmy"
+	"github.com/oshahine/findmy-cli/internal/findmy/ledger"
+)
+
+func main() {
+	if len(os.Args) < 2 {
+		usage()
+	}
+	switch os.Args[1] {
+	case "people":
+		runPeople(os.Args[2:])
+	case "person":
+		runPerson(os.Args[2:])
+	case "devices":
+		runDevices(os.Args[2:])
+	case "device":
+		runDevice(os.Args[2:])
+	case "items":
+		runItems(os.Args[2:])
+	case "item":
+		runItem(os.Args[2:])
+	case "watch":
+		runWatch(os.Args[2:])
+	case "log":
+		runLog(os.Args[2:])
+	case "ring":
+		runRing(os.Args[2:])
+	case "phone":
+		runPhone(os.Args[2:])
+	case "alias":
+		runAlias(os.Args[2:])
+	case "-h", "--help", "help":
+		usage()
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
+		usage()
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, `findmy — query Find My via UI scraping
+
+Usage:
+  findmy people  [--json] [--keep]
+  findmy person  <name> [--json] [--keep] [--zoom]
+  findmy devices [--json] [--keep]
+  findmy device  <name> [--json] [--keep] [--zoom]
+  findmy items   [--json] [--keep]
+  findmy item    <name> [--json] [--keep]
+  findmy watch   <people|devices|items> [--interval=5m] [--diff] [--json] [--once]
+  findmy log     <name> [--kind=people|devices|items] [--since=DURATION] [--until=DURATION] [--limit=N] [--json]
+  findmy ring    <device|alias> [--confirm]
+  findmy phone   [device|alias] [--confirm]        (defaults to the "phone" alias)
+  findmy alias   [<name> <device> | --delete <name>]
+
+Flags:
+  --json           emit JSON instead of a human table
+  --keep           leave debug screenshots in /tmp/findmy-cli/
+  --no-log         skip writing observations to the history ledger
+  --zoom           click matched row and OCR the detail pane
+  --interval=DUR   watch polling interval (default 5m)
+  --diff           watch: emit only changed rows (default on for --json, off for human)
+  --once           watch: poll once and exit
+  --confirm        ring: actually play the sound (without it, dry run)`)
+	os.Exit(2)
+}
+
+type runOpts struct {
+	json    bool
+	keep    bool
+	zoom    bool
+	noLog   bool
+	confirm bool
+}
+
+// parseOpts splits args into known flags and positional args. Go's flag
+// package stops at the first non-flag, but `findmy person Omar Shahine
+// --json` puts the flag after positional args, so we pre-extract flags
+// from anywhere in the slice.
+func parseOpts(args []string) (runOpts, []string) {
+	var o runOpts
+	var positional []string
+	for _, a := range args {
+		switch a {
+		case "--json", "-json":
+			o.json = true
+		case "--keep", "-keep":
+			o.keep = true
+		case "--no-log", "-no-log":
+			o.noLog = true
+		case "--zoom", "-zoom":
+			o.zoom = true
+		case "--confirm", "-confirm":
+			o.confirm = true
+		default:
+			positional = append(positional, a)
+		}
+	}
+	_ = flag.CommandLine
+	return o, positional
+}
+
+func runWatch(args []string) {
+	opts, err := parseWatchOpts(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		fmt.Fprintln(os.Stderr, "usage: findmy watch <people|devices|items> [--interval=5m] [--diff] [--json] [--once]")
+		os.Exit(2)
+	}
+	must(findmy.Watch(opts))
+}
+
+func parseWatchOpts(args []string) (findmy.WatchOptions, error) {
+	opts := findmy.WatchOptions{Interval: 5 * time.Minute}
+	var positional []string
+	diffSet := false
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--json" || a == "-json":
+			opts.JSON = true
+		case a == "--once" || a == "-once":
+			opts.Once = true
+		case a == "--diff" || a == "-diff":
+			opts.Diff = true
+			diffSet = true
+		case a == "--diff=false" || a == "-diff=false" || a == "--no-diff":
+			opts.Diff = false
+			diffSet = true
+		case a == "--interval" || a == "-interval":
+			i++
+			if i >= len(args) {
+				return opts, fmt.Errorf("missing value for %s", a)
+			}
+			interval, err := parseWatchInterval(args[i])
+			if err != nil {
+				return opts, fmt.Errorf("invalid interval %q: %w", args[i], err)
+			}
+			opts.Interval = interval
+		case strings.HasPrefix(a, "--interval="):
+			intervalText := strings.TrimPrefix(a, "--interval=")
+			interval, err := parseWatchInterval(intervalText)
+			if err != nil {
+				return opts, fmt.Errorf("invalid interval %q: %w", intervalText, err)
+			}
+			opts.Interval = interval
+		case strings.HasPrefix(a, "-interval="):
+			intervalText := strings.TrimPrefix(a, "-interval=")
+			interval, err := parseWatchInterval(intervalText)
+			if err != nil {
+				return opts, fmt.Errorf("invalid interval %q: %w", intervalText, err)
+			}
+			opts.Interval = interval
+		case strings.HasPrefix(a, "-"):
+			return opts, fmt.Errorf("unknown flag %s", a)
+		default:
+			positional = append(positional, a)
+		}
+	}
+
+	if len(positional) != 1 {
+		return opts, fmt.Errorf("watch requires exactly one kind")
+	}
+	opts.Kind = findmy.WatchKind(positional[0])
+	switch opts.Kind {
+	case findmy.WatchPeople, findmy.WatchDevices, findmy.WatchItems:
+	default:
+		return opts, fmt.Errorf("unknown watch kind %q", positional[0])
+	}
+	if !diffSet {
+		opts.Diff = opts.JSON
+	}
+	return opts, nil
+}
+
+func parseWatchInterval(text string) (time.Duration, error) {
+	interval, err := time.ParseDuration(text)
+	if err != nil {
+		return 0, err
+	}
+	if interval <= 0 {
+		return 0, fmt.Errorf("must be greater than zero")
+	}
+	return interval, nil
+}
+
+func tmpDir() string {
+	d := "/tmp/findmy-cli"
+	_ = os.MkdirAll(d, 0o755)
+	return d
+}
+
+func runPeople(args []string) {
+	opts, _ := parseOpts(args)
+
+	w, err := findmy.PreparePeople()
+	must(err)
+	shot := filepath.Join(tmpDir(), "people.png")
+	must(findmy.Capture(w, shot))
+	defer cleanup(shot, opts.keep)
+
+	lines, err := findmy.OCR(shot)
+	must(err)
+
+	sidebarRightPx, textColMinPx := pixelLayout(w, shot)
+	must(findmy.RequireSidebarVisible(lines, sidebarRightPx, "People"))
+	people := findmy.ParsePeople(lines, sidebarRightPx, textColMinPx)
+	appendObservations("people", peopleObservations(people), opts.noLog)
+
+	if opts.json {
+		emitJSON(people)
+		return
+	}
+	if len(people) == 0 {
+		fmt.Println("(no people found)")
+		return
+	}
+	sort.SliceStable(people, func(i, j int) bool { return people[i].Name < people[j].Name })
+	for _, p := range people {
+		fmt.Printf("%s\n  %s", p.Name, p.Location)
+		if p.Staleness != "" {
+			fmt.Printf("  (%s)", p.Staleness)
+		}
+		if p.Distance != "" {
+			fmt.Printf("  [%s]", p.Distance)
+		}
+		fmt.Println()
+	}
+}
+
+func runDevices(args []string) {
+	opts, _ := parseOpts(args)
+
+	w, err := findmy.PrepareDevices()
+	must(err)
+	shot := filepath.Join(tmpDir(), "devices.png")
+	must(findmy.Capture(w, shot))
+	defer cleanup(shot, opts.keep)
+
+	lines, err := findmy.OCR(shot)
+	must(err)
+
+	sidebarRightPx, textColMinPx := pixelLayout(w, shot)
+	must(findmy.RequireSidebarVisible(lines, sidebarRightPx, "Devices"))
+	devices := findmy.ParseDevices(lines, sidebarRightPx, textColMinPx)
+	appendObservations("devices", deviceObservations(devices), opts.noLog)
+
+	if opts.json {
+		emitJSON(devices)
+		return
+	}
+	if len(devices) == 0 {
+		fmt.Println("(no devices found)")
+		return
+	}
+	sort.SliceStable(devices, func(i, j int) bool { return devices[i].Name < devices[j].Name })
+	for _, d := range devices {
+		fmt.Printf("%s\n  %s", d.Name, d.Location)
+		if d.Staleness != "" {
+			fmt.Printf("  (%s)", d.Staleness)
+		}
+		if d.Distance != "" {
+			fmt.Printf("  [%s]", d.Distance)
+		}
+		if d.Battery != "" {
+			fmt.Printf("  {%s}", d.Battery)
+		}
+		fmt.Println()
+	}
+}
+
+func runItems(args []string) {
+	opts, _ := parseOpts(args)
+
+	w, err := findmy.PrepareItems()
+	must(err)
+	shot := filepath.Join(tmpDir(), "items.png")
+	must(findmy.Capture(w, shot))
+	defer cleanup(shot, opts.keep)
+
+	lines, err := findmy.OCR(shot)
+	must(err)
+
+	sidebarRightPx, textColMinPx := pixelLayout(w, shot)
+	must(findmy.RequireSidebarVisible(lines, sidebarRightPx, "Items"))
+	items := findmy.ParseItems(lines, sidebarRightPx, textColMinPx)
+	appendObservations("items", itemObservations(items), opts.noLog)
+
+	if opts.json {
+		emitJSON(items)
+		return
+	}
+	if len(items) == 0 {
+		fmt.Println("(no items found)")
+		return
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	for _, item := range items {
+		fmt.Printf("%s\n  %s", item.Name, item.Location)
+		if item.Staleness != "" {
+			fmt.Printf("  (%s)", item.Staleness)
+		}
+		if item.Distance != "" {
+			fmt.Printf("  [%s]", item.Distance)
+		}
+		if item.Battery != "" {
+			fmt.Printf("  {%s}", item.Battery)
+		}
+		fmt.Println()
+	}
+}
+
+func runDevice(args []string) {
+	opts, rest := parseOpts(args)
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: findmy device <name> [--json] [--keep] [--zoom]")
+		os.Exit(2)
+	}
+	target := strings.ToLower(strings.Join(rest, " "))
+
+	w, err := findmy.PrepareDevices()
+	must(err)
+	shot := filepath.Join(tmpDir(), "devices.png")
+	must(findmy.Capture(w, shot))
+	defer cleanup(shot, opts.keep)
+
+	lines, err := findmy.OCR(shot)
+	must(err)
+
+	sidebarRightPx, textColMinPx := pixelLayout(w, shot)
+	must(findmy.RequireSidebarVisible(lines, sidebarRightPx, "Devices"))
+	devices := findmy.ParseDevices(lines, sidebarRightPx, textColMinPx)
+
+	var match *findmy.Device
+	for i := range devices {
+		if strings.EqualFold(strings.TrimSpace(devices[i].Name), target) {
+			match = &devices[i]
+			break
+		}
+	}
+	if match == nil {
+		for i := range devices {
+			if strings.Contains(strings.ToLower(devices[i].Name), target) {
+				match = &devices[i]
+				break
+			}
+		}
+	}
+	if match == nil {
+		fmt.Fprintf(os.Stderr, "no device matching %q in sidebar\n", target)
+		os.Exit(1)
+	}
+	if opts.zoom {
+		nameLine, ok := findSidebarNameLine(lines, sidebarRightPx, textColMinPx, match.Name)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "could not locate sidebar row for %q\n", match.Name)
+			os.Exit(1)
+		}
+		detailShot := filepath.Join(tmpDir(), "device-detail.png")
+		must(enrichWithDetailPane(w, shot, detailShot, nameLine, sidebarRightPx, opts.keep, match.Name, func(precise, city, region, postal string) {
+			match.PreciseAddress = precise
+			match.City = city
+			match.Region = region
+			match.PostalCode = postal
+		}))
+	}
+
+	if opts.json {
+		emitJSON(match)
+		return
+	}
+	fmt.Printf("%s\n  %s", match.Name, match.Location)
+	if match.Staleness != "" {
+		fmt.Printf("  (%s)", match.Staleness)
+	}
+	if match.Distance != "" {
+		fmt.Printf("  [%s]", match.Distance)
+	}
+	if match.Battery != "" {
+		fmt.Printf("  {%s}", match.Battery)
+	}
+	if match.PreciseAddress != "" {
+		fmt.Printf("\n  %s", match.PreciseAddress)
+		if match.City != "" || match.Region != "" || match.PostalCode != "" {
+			fmt.Printf("\n  %s", strings.TrimSpace(strings.Join([]string{match.City, match.Region, match.PostalCode}, " ")))
+		}
+	}
+	fmt.Println()
+}
+
+func runItem(args []string) {
+	opts, rest := parseOpts(args)
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: findmy item <name> [--json] [--keep]")
+		os.Exit(2)
+	}
+	target := strings.ToLower(strings.Join(rest, " "))
+
+	w, err := findmy.PrepareItems()
+	must(err)
+	shot := filepath.Join(tmpDir(), "items.png")
+	must(findmy.Capture(w, shot))
+	defer cleanup(shot, opts.keep)
+
+	lines, err := findmy.OCR(shot)
+	must(err)
+
+	sidebarRightPx, textColMinPx := pixelLayout(w, shot)
+	must(findmy.RequireSidebarVisible(lines, sidebarRightPx, "Items"))
+	items := findmy.ParseItems(lines, sidebarRightPx, textColMinPx)
+
+	var match *findmy.Item
+	for i := range items {
+		if strings.EqualFold(strings.TrimSpace(items[i].Name), target) {
+			match = &items[i]
+			break
+		}
+	}
+	if match == nil {
+		for i := range items {
+			if strings.Contains(strings.ToLower(items[i].Name), target) {
+				match = &items[i]
+				break
+			}
+		}
+	}
+	if match == nil {
+		fmt.Fprintf(os.Stderr, "no item matching %q in sidebar\n", target)
+		os.Exit(1)
+	}
+
+	if opts.json {
+		emitJSON(match)
+		return
+	}
+	fmt.Printf("%s\n  %s", match.Name, match.Location)
+	if match.Staleness != "" {
+		fmt.Printf("  (%s)", match.Staleness)
+	}
+	if match.Distance != "" {
+		fmt.Printf("  [%s]", match.Distance)
+	}
+	if match.Battery != "" {
+		fmt.Printf("  {%s}", match.Battery)
+	}
+	fmt.Println()
+}
+
+type logOpts struct {
+	json  bool
+	kind  string
+	since time.Duration
+	until time.Duration
+	limit int
+}
+
+func runLog(args []string) {
+	opts, rest, err := parseLogOpts(args)
+	must(err)
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: findmy log <name> [--kind=people|devices|items] [--since=DURATION] [--until=DURATION] [--limit=N] [--json]")
+		os.Exit(2)
+	}
+
+	now := time.Now()
+	query := ledger.QueryOptions{
+		Name:  strings.Join(rest, " "),
+		Kind:  opts.kind,
+		Limit: opts.limit,
+	}
+	if opts.since > 0 {
+		query.Since = now.Add(-opts.since)
+	}
+	if opts.until > 0 {
+		query.Until = now.Add(-opts.until)
+	}
+
+	l, err := ledger.Open("")
+	must(err)
+	defer l.Close()
+
+	obs, err := l.Query(context.Background(), query)
+	must(err)
+	if opts.json {
+		emitJSON(obs)
+		return
+	}
+	if len(obs) == 0 {
+		fmt.Println("(no observations found)")
+		return
+	}
+	printLog(obs)
+}
+
+func parseLogOpts(args []string) (logOpts, []string, error) {
+	opts := logOpts{limit: 100}
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--json" || a == "-json":
+			opts.json = true
+		case a == "--kind" || a == "-kind":
+			i++
+			if i >= len(args) {
+				return opts, nil, fmt.Errorf("--kind requires a value")
+			}
+			opts.kind = args[i]
+		case strings.HasPrefix(a, "--kind="):
+			opts.kind = strings.TrimPrefix(a, "--kind=")
+		case strings.HasPrefix(a, "-kind="):
+			opts.kind = strings.TrimPrefix(a, "-kind=")
+		case a == "--since" || a == "-since":
+			i++
+			if i >= len(args) {
+				return opts, nil, fmt.Errorf("--since requires a duration")
+			}
+			d, err := time.ParseDuration(args[i])
+			if err != nil {
+				return opts, nil, fmt.Errorf("parse --since: %w", err)
+			}
+			opts.since = d
+		case strings.HasPrefix(a, "--since="):
+			d, err := time.ParseDuration(strings.TrimPrefix(a, "--since="))
+			if err != nil {
+				return opts, nil, fmt.Errorf("parse --since: %w", err)
+			}
+			opts.since = d
+		case strings.HasPrefix(a, "-since="):
+			d, err := time.ParseDuration(strings.TrimPrefix(a, "-since="))
+			if err != nil {
+				return opts, nil, fmt.Errorf("parse --since: %w", err)
+			}
+			opts.since = d
+		case a == "--until" || a == "-until":
+			i++
+			if i >= len(args) {
+				return opts, nil, fmt.Errorf("--until requires a duration")
+			}
+			d, err := time.ParseDuration(args[i])
+			if err != nil {
+				return opts, nil, fmt.Errorf("parse --until: %w", err)
+			}
+			opts.until = d
+		case strings.HasPrefix(a, "--until="):
+			d, err := time.ParseDuration(strings.TrimPrefix(a, "--until="))
+			if err != nil {
+				return opts, nil, fmt.Errorf("parse --until: %w", err)
+			}
+			opts.until = d
+		case strings.HasPrefix(a, "-until="):
+			d, err := time.ParseDuration(strings.TrimPrefix(a, "-until="))
+			if err != nil {
+				return opts, nil, fmt.Errorf("parse --until: %w", err)
+			}
+			opts.until = d
+		case a == "--limit" || a == "-limit":
+			i++
+			if i >= len(args) {
+				return opts, nil, fmt.Errorf("--limit requires a value")
+			}
+			limit, err := strconv.Atoi(args[i])
+			if err != nil {
+				return opts, nil, fmt.Errorf("parse --limit: %w", err)
+			}
+			opts.limit = limit
+		case strings.HasPrefix(a, "--limit="):
+			limit, err := strconv.Atoi(strings.TrimPrefix(a, "--limit="))
+			if err != nil {
+				return opts, nil, fmt.Errorf("parse --limit: %w", err)
+			}
+			opts.limit = limit
+		case strings.HasPrefix(a, "-limit="):
+			limit, err := strconv.Atoi(strings.TrimPrefix(a, "-limit="))
+			if err != nil {
+				return opts, nil, fmt.Errorf("parse --limit: %w", err)
+			}
+			opts.limit = limit
+		default:
+			positional = append(positional, a)
+		}
+	}
+	if opts.kind != "" && opts.kind != "people" && opts.kind != "devices" && opts.kind != "items" {
+		return opts, nil, fmt.Errorf("--kind must be people, devices, or items")
+	}
+	if opts.limit < 0 {
+		return opts, nil, fmt.Errorf("--limit must be non-negative")
+	}
+	return opts, positional, nil
+}
+
+func appendObservations(kind string, obs []ledger.Observation, skip bool) {
+	if skip || len(obs) == 0 {
+		return
+	}
+	l, err := ledger.Open("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not open %s history ledger: %v\n", kind, err)
+		return
+	}
+	defer l.Close()
+	if err := l.Append(context.Background(), obs); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not write %s history ledger: %v\n", kind, err)
+	}
+}
+
+func peopleObservations(people []findmy.Person) []ledger.Observation {
+	now := time.Now().UTC()
+	obs := make([]ledger.Observation, 0, len(people))
+	for _, p := range people {
+		raw, _ := json.Marshal(p)
+		obs = append(obs, ledger.Observation{
+			Ts:        now,
+			Kind:      "people",
+			Name:      p.Name,
+			Location:  p.Location,
+			Staleness: p.Staleness,
+			Distance:  p.Distance,
+			Raw:       raw,
+		})
+	}
+	return obs
+}
+
+func deviceObservations(devices []findmy.Device) []ledger.Observation {
+	now := time.Now().UTC()
+	obs := make([]ledger.Observation, 0, len(devices))
+	for _, d := range devices {
+		raw, _ := json.Marshal(d)
+		obs = append(obs, ledger.Observation{
+			Ts:        now,
+			Kind:      "devices",
+			Name:      d.Name,
+			Location:  d.Location,
+			Staleness: d.Staleness,
+			Distance:  d.Distance,
+			Battery:   d.Battery,
+			Raw:       raw,
+		})
+	}
+	return obs
+}
+
+func itemObservations(items []findmy.Item) []ledger.Observation {
+	now := time.Now().UTC()
+	obs := make([]ledger.Observation, 0, len(items))
+	for _, item := range items {
+		raw, _ := json.Marshal(item)
+		obs = append(obs, ledger.Observation{
+			Ts:        now,
+			Kind:      "items",
+			Name:      item.Name,
+			Location:  item.Location,
+			Staleness: item.Staleness,
+			Distance:  item.Distance,
+			Battery:   item.Battery,
+			Raw:       raw,
+		})
+	}
+	return obs
+}
+
+func printLog(obs []ledger.Observation) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TS\tName\tLocation\tDistance\tBattery\tStaleness")
+	for _, o := range obs {
+		fmt.Fprintf(
+			w,
+			"%s\t%s\t%s\t%s\t%s\t%s\n",
+			o.Ts.Local().Format("2006-01-02 15:04:05"),
+			o.Name,
+			o.Location,
+			o.Distance,
+			o.Battery,
+			o.Staleness,
+		)
+	}
+	_ = w.Flush()
+}
+
+func runPerson(args []string) {
+	opts, rest := parseOpts(args)
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: findmy person <name> [--json] [--keep] [--zoom]")
+		os.Exit(2)
+	}
+	target := strings.ToLower(strings.Join(rest, " "))
+
+	w, err := findmy.PreparePeople()
+	must(err)
+	shot := filepath.Join(tmpDir(), "people.png")
+	must(findmy.Capture(w, shot))
+	defer cleanup(shot, opts.keep)
+
+	lines, err := findmy.OCR(shot)
+	must(err)
+
+	sidebarRightPx, textColMinPx := pixelLayout(w, shot)
+	must(findmy.RequireSidebarVisible(lines, sidebarRightPx, "People"))
+	people := findmy.ParsePeople(lines, sidebarRightPx, textColMinPx)
+
+	var match *findmy.Person
+	for i := range people {
+		if strings.EqualFold(strings.TrimSpace(people[i].Name), target) {
+			match = &people[i]
+			break
+		}
+	}
+	if match == nil {
+		for i := range people {
+			if strings.Contains(strings.ToLower(people[i].Name), target) {
+				match = &people[i]
+				break
+			}
+		}
+	}
+	if match == nil {
+		fmt.Fprintf(os.Stderr, "no person matching %q in sidebar\n", target)
+		os.Exit(1)
+	}
+	if opts.zoom {
+		nameLine, ok := findSidebarNameLine(lines, sidebarRightPx, textColMinPx, match.Name)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "could not locate sidebar row for %q\n", match.Name)
+			os.Exit(1)
+		}
+		detailShot := filepath.Join(tmpDir(), "person-detail.png")
+		must(enrichWithDetailPane(w, shot, detailShot, nameLine, sidebarRightPx, opts.keep, match.Name, func(precise, city, region, postal string) {
+			match.PreciseAddress = precise
+			match.City = city
+			match.Region = region
+			match.PostalCode = postal
+		}))
+	}
+
+	if opts.json {
+		emitJSON(match)
+		return
+	}
+	fmt.Printf("%s\n  %s", match.Name, match.Location)
+	if match.Staleness != "" {
+		fmt.Printf("  (%s)", match.Staleness)
+	}
+	if match.Distance != "" {
+		fmt.Printf("  [%s]", match.Distance)
+	}
+	if match.PreciseAddress != "" {
+		fmt.Printf("\n  %s", match.PreciseAddress)
+		if match.City != "" || match.Region != "" || match.PostalCode != "" {
+			fmt.Printf("\n  %s", strings.TrimSpace(strings.Join([]string{match.City, match.Region, match.PostalCode}, " ")))
+		}
+	}
+	fmt.Println()
+}
+
+func findSidebarNameLine(lines []findmy.TextLine, sidebarRightPx, textColMinPx int, name string) (findmy.TextLine, bool) {
+	target := strings.ToLower(strings.TrimSpace(name))
+	var contains *findmy.TextLine
+	for i := range lines {
+		l := lines[i]
+		txt := strings.TrimSpace(l.Text)
+		if txt == "" {
+			continue
+		}
+		if l.X+l.Width/2 >= sidebarRightPx {
+			continue
+		}
+		if l.X < textColMinPx {
+			continue
+		}
+		candidate := strings.ToLower(txt)
+		if candidate == target {
+			return l, true
+		}
+		if contains == nil && strings.Contains(candidate, target) {
+			contains = &l
+		}
+	}
+	if contains != nil {
+		return *contains, true
+	}
+	return findmy.TextLine{}, false
+}
+
+func enrichWithDetailPane(w *findmy.Window, sidebarShotPath, detailShotPath string, clickLine findmy.TextLine, sidebarRightPx int, keep bool, entityName string, apply func(precise, city, region, postal string)) error {
+	clickX := clickLine.X + clickLine.Width/2
+	clickY := clickLine.Y + clickLine.Height/2
+	screenX, screenY := windowPointFromImagePoint(w, sidebarShotPath, clickX, clickY)
+	if err := findmy.Click(screenX, screenY); err != nil {
+		return fmt.Errorf("click matched row: %w", err)
+	}
+
+	time.Sleep(zoomDelay())
+
+	if err := findmy.Capture(w, detailShotPath); err != nil {
+		return err
+	}
+	defer cleanup(detailShotPath, keep)
+
+	lines, err := findmy.OCR(detailShotPath)
+	if err != nil {
+		return err
+	}
+	precise, city, region, postal, err := findmy.ExtractDetailPaneAddress(lines, sidebarRightPx, entityName)
+	if err != nil && !errors.Is(err, findmy.ErrNoDetailPane) {
+		return err
+	}
+	if precise != "" || city != "" || region != "" || postal != "" {
+		apply(precise, city, region, postal)
+		return nil
+	}
+	// Not fatal: the coarse sidebar reading is still good, and callers pipe
+	// --json into scripts that a non-zero exit would break. Warn loudly
+	// instead — the one thing --zoom must never do is invent an address.
+	warnNoPreciseAddress(entityName)
+	return nil
+}
+
+func warnNoPreciseAddress(entityName string) {
+	fmt.Fprintf(os.Stderr, "warning: --zoom read no precise address for %q.\n", entityName)
+	fmt.Fprintln(os.Stderr, "         macOS 26 replaced FindMy's split view with a floating sidebar over a")
+	fmt.Fprintln(os.Stderr, "         full-window map. Selecting a row now opens a map callout carrying the")
+	fmt.Fprintln(os.Stderr, "         same coarse location as the sidebar, not a street address, so there is")
+	fmt.Fprintln(os.Stderr, "         nothing more precise on screen to read. See issue #13.")
+}
+
+func zoomDelay() time.Duration {
+	const fallback = 600 * time.Millisecond
+	if raw := os.Getenv("FINDMY_ZOOM_DELAY_MS"); raw != "" {
+		ms, err := strconv.Atoi(raw)
+		if err == nil && ms > 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return fallback
+}
+
+// pixelLayout returns the sidebar-right and name-column-left thresholds in
+// image pixels. The FindMy sidebar is ~340pt wide; the avatar column holds a
+// circle centered around 40pt, so a 60pt cutoff drops centered avatar OCR
+// fragments while admitting real name/location text.
+//
+// 60pt rather than 80pt because macOS 26 replaced the split view with a
+// floating sidebar panel inset from the window edge, tightening the avatar
+// column: names now start around 66pt from the window's left edge (measured
+// on 26.6.2), where an 80pt cutoff would drop every row. The older split-view
+// layout put names around 90pt, so 60pt admits both.
+//
+// We use a float scale because some displays (e.g. a 4K dummy plug) report
+// non-integer pixel-per-point ratios.
+func pixelLayout(w *findmy.Window, imagePath string) (sidebarRightPx, textColMinPx int) {
+	scale := imageScale(w, imagePath)
+	return int(340 * scale), int(60 * scale)
+}
+
+func windowPointFromImagePoint(w *findmy.Window, imagePath string, px, py int) (int, int) {
+	scale := imageScale(w, imagePath)
+	return w.X + int(float64(px)/scale), w.Y + int(float64(py)/scale)
+}
+
+func imageScale(w *findmy.Window, imagePath string) float64 {
+	scale := 2.0
+	if info, err := imageSize(imagePath); err == nil && w.Width > 0 {
+		if s := float64(info.W) / float64(w.Width); s >= 1 {
+			scale = s
+		}
+	}
+	return scale
+}
+
+type imgInfo struct{ W, H int }
+
+func imageSize(path string) (imgInfo, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return imgInfo{}, err
+	}
+	defer f.Close()
+	cfg, _, err := decodeConfig(f)
+	if err != nil {
+		return imgInfo{}, err
+	}
+	return imgInfo{W: cfg.Width, H: cfg.Height}, nil
+}
+
+func emitJSON(v any) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(v)
+}
+
+func cleanup(path string, keep bool) {
+	if !keep {
+		_ = os.Remove(path)
+	}
+}
+
+// ring locates a device by scrolling the sidebar and plays a sound on it.
+// Ringing is loud and happens on a device that may not be in the room, so it
+// is dry-run by default: without --confirm we find the button and report
+// where it is, but never click it.
+func ring(target string, opts runOpts) error {
+	raw := strings.TrimSpace(target)
+	if raw == "" {
+		fmt.Fprintln(os.Stderr, "usage: findmy ring <device|alias> [--confirm]")
+		os.Exit(2)
+	}
+	resolved := findmy.ResolveAlias(raw)
+	if resolved != raw {
+		fmt.Fprintf(os.Stderr, "%s -> %s\n", raw, resolved)
+	}
+
+	if !opts.confirm {
+		fmt.Fprintln(os.Stderr, "Dry run: locating the Play Sound button without clicking it.")
+		fmt.Fprintln(os.Stderr, "Add --confirm to actually make the device play a sound.")
+	}
+
+	// Take this before PrepareDevices, which activates Find My. Read it after
+	// and we would just record Find My and never hand the display back.
+	findmy.RememberFrontApp()
+	// Every path below leaves Find My frontmost and on the Devices tab, errors
+	// included. ring therefore returns its errors rather than calling must:
+	// must exits the process, and os.Exit does not run deferred functions.
+	defer func() {
+		_ = findmy.SwitchTab(findmy.GetAppStrings().PeopleTab)
+		findmy.RestoreUserSpace()
+	}()
+
+	w, err := findmy.PrepareDevices()
+	if err != nil {
+		return err
+	}
+
+	match, err := findmy.FindDeviceByScroll(w, resolved, tmpDir())
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Found: %s\n", match.Name)
+
+	if err := findmy.RingDevice(w, match, tmpDir(), !opts.confirm); err != nil {
+		return err
+	}
+
+	if opts.confirm {
+		fmt.Printf("Ringing %s...\n", match.Name)
+	} else {
+		fmt.Println("Dry run complete. Add --confirm to ring.")
+	}
+	return nil
+}
+
+func runRing(args []string) {
+	opts, rest := parseOpts(args)
+	must(ring(strings.Join(rest, " "), opts))
+}
+
+// runPhone is the shorthand: `findmy phone` rings whatever the "phone" alias
+// points at, so the common case needs no device name.
+func runPhone(args []string) {
+	opts, rest := parseOpts(args)
+	target := strings.Join(rest, " ")
+	if strings.TrimSpace(target) == "" {
+		target = findmy.ResolveAlias("phone")
+		if target == "phone" {
+			fmt.Fprintln(os.Stderr, "no \"phone\" alias set. Run: findmy alias phone \"Omar's iPhone\"")
+			os.Exit(2)
+		}
+	}
+	must(ring(target, opts))
+}
+
+// runAlias manages the name shortcuts in ~/.config/findmy-cli/aliases.json.
+func runAlias(args []string) {
+	_, rest := parseOpts(args)
+	m := findmy.LoadAliases()
+
+	for i, a := range rest {
+		if a != "--delete" && a != "-delete" {
+			continue
+		}
+		if i+1 >= len(rest) {
+			fmt.Fprintln(os.Stderr, "usage: findmy alias --delete <name>")
+			os.Exit(2)
+		}
+		name := rest[i+1]
+		key := strings.ToLower(name)
+		found := false
+		for k := range m {
+			if strings.ToLower(k) == key {
+				delete(m, k)
+				found = true
+			}
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "alias %q not found\n", name)
+			os.Exit(1)
+		}
+		must(findmy.SaveAliases(m))
+		fmt.Printf("deleted alias %q\n", name)
+		return
+	}
+
+	if len(rest) == 0 {
+		if len(m) == 0 {
+			fmt.Fprintln(os.Stderr, "no aliases set. Add one: findmy alias phone \"Omar's iPhone\"")
+			return
+		}
+		names := make([]string, 0, len(m))
+		for k := range m {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, k := range names {
+			fmt.Printf("%s -> %s\n", k, m[k])
+		}
+		return
+	}
+
+	if len(rest) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: findmy alias <name> <device>")
+		os.Exit(2)
+	}
+	name := rest[0]
+	device := strings.Join(rest[1:], " ")
+	for k := range m {
+		if strings.EqualFold(k, name) {
+			delete(m, k)
+		}
+	}
+	m[name] = device
+	must(findmy.SaveAliases(m))
+	fmt.Printf("%s -> %s\n", name, device)
+}
+
+func must(err error) {
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}

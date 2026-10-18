@@ -1,0 +1,7 @@
+#!/bin/sh
+# Normalize Spotlight's application suffix for the upstream Find My window lookup.
+if [ "$#" -eq 4 ] && [ "$1" = "-raw" ] && [ "$2" = "-name" ] && [ "$3" = "kMDItemDisplayName" ] && [ "$4" = "/System/Applications/FindMy.app" ]; then
+  /usr/bin/mdls "$@" | /usr/bin/sed 's/\.app$//'
+else
+  exec /usr/bin/mdls "$@"
+fi
