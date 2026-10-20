@@ -42,8 +42,11 @@
 </section>
 <section class="demo-section" id="demo">
   <div class="wrap">
-    <div class="section-heading"><div><p class="eyebrow">A QUICK LOOK</p><h2>From an item to its history.</h2></div><p>Select a bag, switch the date range, and explore its recorded places. This is the actual dashboard, captured with sample data.</p></div>
-    <figure class="demo-player"><div class="frame-label"><span class="window-dots" aria-hidden="true">● ● ●</span><span>TagTracker / recorded demo</span><a href="assets/demo.mp4" download>Download MP4 ↗</a></div><video controls playsinline preload="metadata" poster="assets/history.png" width="1200" height="1080" aria-label="TagTracker demo with fictional items and devices"><source src="assets/demo.mp4" type="video/mp4"><a href="assets/demo.mp4">Watch or download the demo video.</a></video><figcaption>Select items and devices, change dates, connect timeline points, inspect a pin, and fit all points. Fictional observations at public landmarks. <a href="assets/demo.gif">View the animated GIF.</a></figcaption></figure>
+    <div class="section-heading"><div><p class="eyebrow">TWO QUICK LOOKS</p><h2>Browse history. Explore the map.</h2></div><p>Two short demos of the actual dashboard, captured with fictional items and observations at public landmarks.</p></div>
+    <div class="demo-clips">
+      <figure class="demo-player" data-animation="assets/history-demo.gif" data-poster="assets/history-demo.png" data-title="Browse history"><div class="frame-label"><span class="window-dots" aria-hidden="true">● ● ●</span><span>Browse history</span><span class="demo-controls"><button type="button" data-demo-toggle>Pause demo</button><a href="assets/history-demo.gif">Open GIF ↗</a></span></div><picture><source media="(prefers-reduced-motion: reduce)" srcset="assets/history-demo.png"><img src="assets/history-demo.gif" alt="Select a fictional backpack and change its history date range" width="1000" height="667" loading="lazy"></picture><figcaption><strong>Browse history.</strong> Select an item and switch between the last day, week, and all time.</figcaption></figure>
+      <figure class="demo-player" data-animation="assets/map-demo.gif" data-poster="assets/map-demo.png" data-title="Explore the map"><div class="frame-label"><span class="window-dots" aria-hidden="true">● ● ●</span><span>Explore the map</span><span class="demo-controls"><button type="button" data-demo-toggle>Pause demo</button><a href="assets/map-demo.gif">Open GIF ↗</a></span></div><picture><source media="(prefers-reduced-motion: reduce)" srcset="assets/map-demo.png"><img src="assets/map-demo.gif" alt="Connect map points, inspect a pin, and fit all places" width="1000" height="667" loading="lazy"></picture><figcaption><strong>Explore the map.</strong> Connect timeline points, inspect a pin, and fit every displayed place.</figcaption></figure>
+    </div>
   </div>
 </section>
 <section class="screenshots wrap" aria-labelledby="screenshots-title">
@@ -64,6 +67,12 @@ python3 scripts/setup.py --item 'Keys' --item 'Backpack'</code></pre><ol><li>Cho
 </main>
 <footer class="footer wrap"><div><a class="brand" href="./">TagTracker</a><p>By Daniel Yakobian · MIT license</p></div><div><a href="https://github.com/danielyaa5/tagtracker/issues">Report an issue</a><a href="https://github.com/danielyaa5/tagtracker/blob/main/LICENSE">License</a><a href="https://github.com/danielyaa5/tagtracker/blob/main/THIRD_PARTY_NOTICES.md">Credits</a></div><p class="trademark">AirTag is a trademark of Apple Inc. TagTracker is independent and is not affiliated with or endorsed by Apple. All demo items and observations are fictional.</p></footer>
 <script>
+document.querySelectorAll('.demo-player').forEach(figure=>{
+ const button=figure.querySelector('[data-demo-toggle]'),image=figure.querySelector('img'),source=figure.querySelector('source');
+ let playing=!matchMedia('(prefers-reduced-motion: reduce)').matches;
+ function label(){button.textContent=playing?'Pause demo':'Play demo';button.setAttribute('aria-label',`${playing?'Pause':'Play'} ${figure.dataset.title} demo`);}
+ label();button.addEventListener('click',()=>{playing=!playing;source.media='not all';image.src=playing?figure.dataset.animation:figure.dataset.poster;label();});
+});
 
 const copy=document.getElementById('copy');copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(document.getElementById('commands').textContent);copy.textContent='Copied';document.getElementById('copy-status').textContent='Build commands copied.';setTimeout(()=>{copy.textContent='Copy'},2000)}catch{document.getElementById('copy-status').textContent='Select the commands and copy them manually.'}});
 </script>

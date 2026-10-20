@@ -10,11 +10,17 @@ Sparkle checks for signed updates, and **TagTracker → Check for Updates…** l
 
 ## Screenshots and demo
 
-[Project website](https://danielyaa5.github.io/tagtracker/) · [Watch the demo video](https://danielyaa5.github.io/tagtracker/#demo) · [Download MP4](https://danielyaa5.github.io/tagtracker/assets/demo.mp4) · [Animated GIF](site/assets/demo.gif)
+[Project website](https://danielyaa5.github.io/tagtracker/) · [View the demos](https://danielyaa5.github.io/tagtracker/#demo)
 
 All screenshots and the demo use fictional items, devices, and observations at public landmarks.
 
-![Demo: select an item, change the date range, inspect a map pin, and fit all points](site/assets/demo.gif)
+**Browse history.** Select an item, then switch between the last day, week, and all time.
+
+![Select a fictional backpack and change its history date range](site/assets/history-demo.gif)
+
+**Explore the map.** Connect timeline points, open a pin, and fit all displayed places.
+
+![Connect map points, inspect a pin, and fit all places](site/assets/map-demo.gif)
 
 | Items and devices | Location history | Device history |
 | --- | --- | --- |
@@ -112,7 +118,7 @@ npm run media:install  # one-time Chromium installation
 npm run media
 ```
 
-`npm run media` regenerates `overview.png`, `history.png`, `devices.png`, `demo.gif`, and `demo.mp4` in `site/assets/`. It exercises item and device history, date filters, timeline lines, pin popups, and fitting all points. The MP4 records the real browser flow. Capture runs headlessly, reads only a temporary fictional database, and closes its browser and server afterward. Existing media is replaced only after a successful capture. Optional overrides: `PYTHON`, `FFMPEG`, and `PLAYWRIGHT_CHROMIUM_EXECUTABLE`.
+`npm run media` regenerates `overview.png`, `history.png`, `devices.png`, and two short animations, `history-demo.gif` and `map-demo.gif`, in `site/assets/`. Matching PNG posters support reduced-motion playback on the website. It exercises item and device history, date filters, timeline lines, pin popups, and fitting all points. Capture runs headlessly, reads only a temporary fictional database, and closes its browser and server afterward. Existing media is replaced only after a successful capture. Optional overrides: `PYTHON`, `FFMPEG`, and `PLAYWRIGHT_CHROMIUM_EXECUTABLE`.
 
 The static website lives in `site/` and deploys through GitHub Pages on pushes to `main`.
 

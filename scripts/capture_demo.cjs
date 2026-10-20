@@ -49,12 +49,15 @@ async function main() {
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    let frames = [];
-    async function frame(seconds = 2) {
-      const file = path.join(temporary, `frame-${frames.length}.png`);
+    const clips = {history: [], map: []};
+    async function frame(clip, seconds) {
+      const frames = clips[clip];
+      const file = path.join(temporary, `${clip}-${frames.length}.png`);
       await page.screenshot({path: file});
       frames.push({file, seconds});
-      await page.waitForTimeout(seconds * 1000);
+    }
+    async function focusHistory() {
+      await page.evaluate(() => window.scrollTo({top: document.querySelector('h2').offsetTop - 24, behavior: 'instant'}));
     }
     async function tiles() {
       await page.waitForFunction(() => document.querySelectorAll('img.leaflet-tile').length > 0 && [...document.querySelectorAll('img.leaflet-tile')].every(img => img.complete && img.naturalWidth > 0), null, {timeout: 30000});
@@ -71,65 +74,54 @@ async function main() {
     await page.getByRole('link', {name: 'Demo backpack', exact: true}).waitFor();
     if (!(await page.locator('body').innerText()).includes('3 items · 2 devices')) throw Error('Demo fixture did not produce the expected item and device counts.');
     await page.screenshot({path: path.join(output, 'overview.png'), fullPage: true});
-    // Capture the real browser flow through Chromium's screencast API. Use the
-    // same ffmpeg dependency for MP4 and GIF, avoiding a second video runtime.
-    const session = await context.newCDPSession(page);
-    const recording = [];
-    const videoStart = performance.now();
-    session.on('Page.screencastFrame', event => {
-      const file = path.join(temporary, `video-${recording.length}.jpg`);
-      fs.writeFileSync(file, Buffer.from(event.data, 'base64'));
-      recording.push({file, at: (performance.now() - videoStart) / 1000});
-      session.send('Page.screencastFrameAck', {sessionId: event.sessionId}).catch(() => {});
-    });
-    await session.send('Page.startScreencast', {format: 'jpeg', quality: 90, maxWidth: viewport.width, maxHeight: viewport.height, everyNthFrame: 1});
-    await frame(1.5);
+    await page.setViewportSize({width: 1200, height: 800});
+    await frame('history', 1.2);
     await page.getByRole('link', {name: 'Demo backpack', exact: true}).click();
     await loaded(4);
-    await frame(2);
+    await focusHistory();
+    await frame('history', 1.8);
     await page.selectOption('#range', '7d');
     await loaded(8);
-    await frame(2);
+    await frame('history', 1.8);
     await page.selectOption('#range', 'all');
     await loaded(10);
+    await frame('history', 1.8);
+    await frame('map', .8);
     await page.getByLabel('Connect lines').check();
     await page.waitForFunction(() => document.querySelector('path[stroke-dasharray]'));
     await page.screenshot({path: path.join(output, 'history.png'), fullPage: true});
-    await frame(2);
+    await frame('map', 1.6);
     await page.locator('.leaflet-interactive[fill="#3889e8"]').first().click();
     await page.locator('.leaflet-popup').waitFor();
-    await frame(2);
+    await frame('map', 2);
     await page.locator('.leaflet-popup-close-button').click();
     await page.getByRole('button', {name: 'Fit all points'}).click();
     await tiles();
-    await frame(1.5);
+    await frame('map', 1.6);
     await page.getByRole('link', {name: '← Back to all items'}).click();
     await page.getByRole('link', {name: 'Demo phone', exact: true}).click();
     await loaded(3);
     await page.selectOption('#range', 'all');
     await loaded(5);
     await page.screenshot({path: path.join(output, 'devices.png'), fullPage: true});
-    await frame(2);
     await page.getByRole('link', {name: '← Back to all items'}).click();
     await page.getByRole('link', {name: 'Demo backpack', exact: true}).waitFor();
-    await frame(1.5);
     if (errors.length) throw Error(errors.join('\n'));
-    const duration = (performance.now() - videoStart) / 1000;
-    await session.send('Page.stopScreencast');
-    if (recording.length < 10) throw Error('Browser did not provide enough video frames.');
     await context.close();
     context = null;
     await browser.close();
     browser = null;
-    const videoList = path.join(temporary, 'video.txt');
-    fs.writeFileSync(videoList, recording.map((frame, index) => `file '${frame.file}'\nduration ${Math.max(.001, (recording[index + 1]?.at ?? duration) - frame.at).toFixed(6)}\n`).join('') + `file '${recording.at(-1).file}'\n`);
-    execFileSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', videoList, '-an', '-vf', 'fps=24', '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', path.join(output, 'demo.mp4')]);
-    const list = path.join(temporary, 'frames.txt');
-    fs.writeFileSync(list, frames.map(frame => `file '${frame.file}'\nduration ${frame.seconds}\n`).join('') + `file '${frames.at(-1).file}'\n`);
-    execFileSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', list, '-filter_complex', 'fps=5,scale=1000:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4', '-loop', '0', path.join(output, 'demo.gif')]);
+    for (const [clip, frames] of Object.entries(clips)) {
+      const list = path.join(temporary, `${clip}.txt`);
+      fs.writeFileSync(list, frames.map(frame => `file '${frame.file}'\nduration ${frame.seconds}\n`).join('') + `file '${frames.at(-1).file}'\n`);
+      const duration = frames.reduce((total, frame) => total + frame.seconds, 0);
+      execFileSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', list, '-t', String(duration), '-filter_complex', 'fps=5,scale=1000:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4', '-loop', '0', path.join(output, `${clip}-demo.gif`)]);
+      fs.copyFileSync(frames[1].file, path.join(output, `${clip}-demo.png`));
+    }
     fs.mkdirSync(ASSETS, {recursive: true});
     for (const name of fs.readdirSync(output)) fs.copyFileSync(path.join(output, name), path.join(ASSETS, name));
-    console.log('Created overview.png, history.png, devices.png, demo.gif, and demo.mp4.');
+    for (const name of ['demo.gif', 'demo.mp4']) fs.rmSync(path.join(ASSETS, name), {force: true});
+    console.log('Created overview.png, history.png, devices.png, and two short GIFs with still posters: history-demo and map-demo.');
     console.log('Verified: item/device history, date filters, timeline lines, pin popup, and fit controls.');
     console.log('All data is fictional. Browser and temporary server are closed after capture.');
   } finally {

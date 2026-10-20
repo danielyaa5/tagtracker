@@ -4,4 +4,4 @@
 
 .demo-controls{display:flex;align-items:center;gap:16px}.demo-controls button{font:inherit;font-weight:650;color:inherit;border:0;background:none;text-decoration:underline;text-underline-offset:4px;padding:4px 0;cursor:pointer}@media(max-width:680px){.frame-label{gap:8px}.demo-controls{gap:10px}.frame-label>span:nth-child(2){max-width:100px;text-align:center}}
 
-.demo-player video{display:block;width:100%;height:auto;max-height:950px;background:#f5f7fa}
+.demo-clips{display:grid;gap:28px}
