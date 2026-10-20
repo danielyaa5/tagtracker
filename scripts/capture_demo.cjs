@@ -50,7 +50,18 @@ async function main() {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     const clips = {history: [], map: []};
+    let mapFrame;
     async function frame(clip, seconds) {
+      if (clip === 'map') {
+        // Focus changes can scroll the page. Keep every frame at the same
+        // document position so the map demo never jumps vertically.
+        await focusHistory();
+        const bounds = await page.locator('#map').boundingBox();
+        if (mapFrame && ['x', 'y', 'width', 'height'].some(key => Math.abs(bounds[key] - mapFrame[key]) > 1)) {
+          throw Error('Map demo framing changed between captures.');
+        }
+        mapFrame = bounds;
+      }
       const frames = clips[clip];
       const file = path.join(temporary, `${clip}-${frames.length}.png`);
       await page.screenshot({path: file});
@@ -58,6 +69,7 @@ async function main() {
     }
     async function focusHistory() {
       await page.evaluate(() => window.scrollTo({top: document.querySelector('h2').offsetTop - 24, behavior: 'instant'}));
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     }
     async function tiles() {
       await page.waitForFunction(() => document.querySelectorAll('img.leaflet-tile').length > 0 && [...document.querySelectorAll('img.leaflet-tile')].every(img => img.complete && img.naturalWidth > 0), null, {timeout: 30000});
@@ -78,6 +90,7 @@ async function main() {
     await frame('history', 1.2);
     await page.getByRole('link', {name: 'Demo backpack', exact: true}).click();
     await loaded(4);
+    await page.addStyleTag({content: 'html { scroll-behavior: auto !important; }'});
     await focusHistory();
     await frame('history', 1.8);
     await page.selectOption('#range', '7d');
@@ -89,15 +102,19 @@ async function main() {
     await frame('map', .8);
     await page.getByLabel('Connect lines').check();
     await page.waitForFunction(() => document.querySelector('path[stroke-dasharray]'));
-    await page.screenshot({path: path.join(output, 'history.png'), fullPage: true});
     await frame('map', 1.6);
-    await page.locator('.leaflet-interactive[fill="#3889e8"]').first().click();
+    // Use a central pin so its popup fits without panning the map.
+    await page.locator('.leaflet-interactive[fill="#3889e8"]').last().click();
     await page.locator('.leaflet-popup').waitFor();
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.leaflet-popup')).opacity === '1');
+    await tiles();
     await frame('map', 2);
     await page.locator('.leaflet-popup-close-button').click();
     await page.getByRole('button', {name: 'Fit all points'}).click();
     await tiles();
     await frame('map', 1.6);
+    // Full-page screenshots run after the clip to avoid changing its viewport.
+    await page.screenshot({path: path.join(output, 'history.png'), fullPage: true});
     await page.getByRole('link', {name: '← Back to all items'}).click();
     await page.getByRole('link', {name: 'Demo phone', exact: true}).click();
     await loaded(3);
@@ -122,7 +139,7 @@ async function main() {
     for (const name of fs.readdirSync(output)) fs.copyFileSync(path.join(output, name), path.join(ASSETS, name));
     for (const name of ['demo.gif', 'demo.mp4']) fs.rmSync(path.join(ASSETS, name), {force: true});
     console.log('Created overview.png, history.png, devices.png, and two short GIFs with still posters: history-demo and map-demo.');
-    console.log('Verified: item/device history, date filters, timeline lines, pin popup, and fit controls.');
+    console.log('Verified: item/device history, date filters, timeline lines, visible pin popup, fit controls, and fixed map-demo framing.');
     console.log('All data is fictional. Browser and temporary server are closed after capture.');
   } finally {
     if (context) await context.close();
