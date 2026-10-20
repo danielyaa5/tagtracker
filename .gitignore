@@ -18,3 +18,9 @@ item-names.json
 saved-places.json
 .clawpatch/
 dock-launcher/build/
+node_modules/
+.tools/
+release/build/
+TagTracker.xcodeproj/
+app/Info.plist
+app/TagTracker.icns

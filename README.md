@@ -1,24 +1,29 @@
 # TagTracker
 
-Local location history for your AirTag items on macOS. TagTracker reads the places displayed in Find My, saves observations in SQLite, and shows them on a local map with date filters.
+Local location history for Find My items and devices on macOS. TagTracker reads the places displayed in Find My, saves observations in SQLite, and shows them on a local map with date filters.
 
-**Experimental source release.** This is currently a command-line collector and browser dashboard, not a packaged or notarized Mac app. A native setup interface and the orange pin-over-stacked-maps icon are planned.
+[![Download for macOS](site/assets/download-mac.svg)](https://github.com/danielyaa5/tagtracker/releases/latest/download/TagTracker.dmg)
+
+**Experimental Mac app.** Apple silicon, macOS 14 or later. The DMG includes the native setup app, collector, and Python runtime. Drag **TagTracker** into **Applications**, then open it there. It ejects its matching installer disk automatically. Use **Start Tracking** to choose your items and configure the local services; grant the requested macOS permissions. **Open History** opens the dashboard in your browser.
+
+Sparkle checks for signed updates, and **TagTracker → Check for Updates…** lets you check manually. Update installation requires your choice. The command-line collector remains available for source builds.
 
 ## Screenshots and demo
 
-[Project website](https://danielyaa5.github.io/tagtracker/) · [Animated demo](site/assets/demo.gif)
+[Project website](https://danielyaa5.github.io/tagtracker/) · [Watch the demo video](https://danielyaa5.github.io/tagtracker/#demo) · [Download MP4](https://danielyaa5.github.io/tagtracker/assets/demo.mp4) · [Animated GIF](site/assets/demo.gif)
 
-All screenshots and the demo use fictional items and observations at public landmarks.
+All screenshots and the demo use fictional items, devices, and observations at public landmarks.
 
 ![Demo: select an item, change the date range, inspect a map pin, and fit all points](site/assets/demo.gif)
 
-| Items overview | Location history |
-| --- | --- |
-| [![Fictional items overview](site/assets/overview.png)](site/assets/overview.png) | [![Fictional backpack history](site/assets/history.png)](site/assets/history.png) |
+| Items and devices | Location history | Device history |
+| --- | --- | --- |
+| [![Fictional items and devices overview](site/assets/overview.png)](site/assets/overview.png) | [![Fictional backpack history](site/assets/history.png)](site/assets/history.png) | [![Fictional phone history](site/assets/devices.png)](site/assets/devices.png) |
 
 ## Features
 
 - History for selected Find My items, stored on your Mac.
+- Optional Devices collection in the same scan, including displayed location, age, distance and battery when visible. Enable with `--devices` during setup or `"collect_devices": true` in the private item configuration. Device and item histories remain separate even when their names match.
 - Map filters for 24 hours, one week, one month, three months, all time, and custom dates.
 - Automatic map fitting and user-configured coordinates for labels such as Home.
 - Five-minute scans after two minutes without keyboard or mouse input.
@@ -34,7 +39,7 @@ The collector needs an awake, logged-in, unlocked Mac. It opens and controls Fin
 
 ## Build and setup
 
-Requirements: macOS, Xcode Command Line Tools (`xcode-select --install`), Go 1.22 or newer, and Python 3.9 or newer. The adapters and LaunchAgents use `/usr/bin/python3`; verify it is available. The deployed collector has been exercised on macOS 27; other versions have not been validated.
+Source-build requirements: macOS, Xcode Command Line Tools (`xcode-select --install`), Go 1.22 or newer, and Python 3.9 or newer. The adapters use Python from the configured service PATH. The packaged app supplies its own interpreter. The deployed collector has been exercised on macOS 27; live Find My collection on other versions has not been validated.
 
 ```sh
 git clone https://github.com/danielyaa5/tagtracker.git
@@ -43,7 +48,7 @@ make build
 python3 scripts/setup.py --item 'Keys' --item 'Backpack'
 ```
 
-Use the exact item names visible in Find My, including case. The setup command writes private configuration and three LaunchAgents but does not start them unless `--load` is added. Configure item aliases in `~/Library/Application Support/TagTracker/item-names.json` if OCR consistently misspells a name. The collector accepts only configured names to avoid recording interface labels as items.
+Use the exact item names visible in Find My, including case. The setup command writes private configuration and three LaunchAgents but does not start them unless `--load` is added. Configure item aliases in `~/Library/Application Support/TagTracker/item-names.json` if OCR consistently misspells a name. The collector accepts only configured names to avoid recording interface labels as items. Devices are discovered by paging the Devices sidebar. Optional `device_aliases` map verified OCR misspellings to a canonical device name; `expected_devices` lists devices that must be read before a sweep is considered complete. Numeric distances and Nearby readings are checked in two separate captures. Original OCR spellings are retained in private record metadata when an alias is used.
 
 In System Settings → Privacy & Security, grant **Accessibility** and **Screen & System Audio Recording** (or **Screen Recording**, depending on macOS) to the built `bin/findmy` collector as requested by macOS. Permission attribution can differ between macOS versions; use the helper's `permissions` command for diagnostics. Rebuilding binaries can invalidate permission grants. Do not disable SIP.
 
@@ -79,7 +84,7 @@ Replace the example with your own label and coordinates. Keep this file private.
 
 No Apple-account credentials or AirTag keys are requested. Collection uses the Find My app already signed in on your Mac. Configuration, history, screenshots used for diagnostics, and logs stay in `~/Library/Application Support/TagTracker/` (override with `TAGTRACKER_DATA_DIR`). Diagnostic OCR text can contain private locations. Do not upload these files in bug reports.
 
-The dashboard binds to loopback only and has no login system. Do not expose it directly to the internet. Map tiles are fetched from OpenStreetMap; the tile provider can see your IP and requested map areas. The optional gazetteer download contacts GeoNames. No personal location history or account credentials are included in this repository.
+The dashboard binds to loopback only and has no login system. Do not expose it directly to the internet. Map tiles are fetched from OpenStreetMap; the tile provider can see your IP and requested map areas. The optional gazetteer download contacts GeoNames. The Mac app checks GitHub Pages for updates and downloads signed archives from GitHub Releases. Sparkle system-profile reporting is disabled. No personal location history or account credentials are included in this repository.
 
 ## Stop or uninstall
 
@@ -99,7 +104,21 @@ Remove the three `io.tagtracker.*.plist` files from `~/Library/LaunchAgents` to 
 
 `python3 scripts/demo_server.py` serves the real dashboard at http://127.0.0.1:8769/ using a temporary sample database. It does not read your configuration or open Find My. Stop it with Control-C to remove the sample data.
 
-To regenerate the screenshots and animated GIF, install Node.js, Playwright with Chromium, and ffmpeg, then run `node scripts/capture_demo.cjs`. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use an existing Chrome/Chromium binary if needed. Capture runs headlessly and closes its browser and demo server afterward. The static website lives in `site/` and deploys through GitHub Pages on pushes to `main`.
+Install Node.js 20+, Python 3.9+, and ffmpeg, then run:
+
+```sh
+npm ci
+npm run media:install  # one-time Chromium installation
+npm run media
+```
+
+`npm run media` regenerates `overview.png`, `history.png`, `devices.png`, `demo.gif`, and `demo.mp4` in `site/assets/`. It exercises item and device history, date filters, timeline lines, pin popups, and fitting all points. The MP4 records the real browser flow. Capture runs headlessly, reads only a temporary fictional database, and closes its browser and server afterward. Existing media is replaced only after a successful capture. Optional overrides: `PYTHON`, `FFMPEG`, and `PLAYWRIGHT_CHROMIUM_EXECUTABLE`.
+
+The static website lives in `site/` and deploys through GitHub Pages on pushes to `main`.
+
+## Mac app releases
+
+See [the release guide](docs/RELEASING.md) for pinned dependencies, Xcode cloud signing and notarization, DMG creation, Sparkle keys, and publishing future updates. No signing credentials or private update key are stored in the repository.
 
 ## Credits and license
 

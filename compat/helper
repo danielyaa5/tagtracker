@@ -1,7 +1,7 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """Collect complete Items rows across the macOS 27 sidebar for findmy-cli."""
 import sys,os,subprocess,json,pathlib,tempfile,struct,time,re
-from idle_control import check,acknowledge_automation,finish,read,cleanup_window,fail_scan,record_status,visible_window,remember_window,IdlePause
+from idle_control import check,acknowledge_automation,finish,read,cleanup_window,fail_scan,record_status,visible_window,remember_window,find_my_windows,event,IdlePause
 from runtime import BASE as base, DATA
 real=str(base/'bin/findmy-helper')
 config=json.loads((DATA/'item-names.json').read_text())
@@ -22,28 +22,7 @@ def same_page(previous,current):
  # Require recognized names at unchanged positions across two scroll attempts.
  return bool(current) and previous is not None and len(previous)==len(current) and all(a[0]==b[0] and abs(a[1]-b[1])<=3 for a,b in zip(previous,current))
 def line(text,x,y,width=160): return dict(text=text,confidence=1.0,x=x,y=y,width=width,height=20)
-def expand_detail(name,cx,cy,img,w,scale):
- try:
-  run(real,'click',str(cx),str(cy))
-  time.sleep(.9)
-  run('/usr/sbin/screencapture','-x','-o','-l',str(w['windowID']),'-t','png',str(img))
-  sc=struct.unpack('>I',img.read_bytes()[16:20])[0]/w['width']
-  card=json.loads(run(real,'ocr',str(img)))
-  run(real,'click',str(int(w['x']+355/sc)),str(int(w['y']+128/sc)))
-  time.sleep(.3)
-  cand=next((l for l in card if canonical.get(l['text'].strip().casefold())==name and 40*sc<=l['x']<250*sc),None)
-  if not cand:return None
-  below=sorted([l for l in card if 40*sc<=l['x']<260*sc and cand['y']<l['y']<cand['y']+180*sc],key=lambda l:l['y'])
-  addr,age=None,None
-  for l in below:
-   txt=l['text'].strip()
-   if not txt or re.match(r'^[\s•·|–-]+$',txt) or txt.casefold() in ('directions','play','share','notify','...'):continue
-   if re.match(r'^\d+(\.\d+)?\s*(mi|km|ft|m)$',txt,re.I):continue
-   if re.search(r'\b(?:min\.?|hr\.?|hours?|days?|weeks?)\s+ago\b|\bNow\b',txt,re.I):age=txt
-   elif not addr and 'unavailable' not in txt.casefold():addr=txt
-  if addr:return f"{addr} • {age or 'Now'}"
- except Exception:pass
- return None
+
 try:
  if not (DATA/'tab-selected').exists() or time.time()-(DATA/'tab-selected').stat().st_mtime>90:
   # A paused scan skips tab selection; that is a pause, not a failed collection.
@@ -53,6 +32,9 @@ try:
  w=visible_window(wins)
  if not w:raise RuntimeError('No visible Find My window to collect from')
  remember_window(w)
+ if config.get('collect_devices') is True:
+  from device_collection import collect_devices
+  collect_devices(w,run,real,DATA,check,config)
  sx,sy=w['x']+160,w['y']+w['height']*.60
  records={}; raw_pages=[]
  for sweep in range(3):
@@ -91,24 +73,8 @@ try:
  missing=sorted(expected-set(records))
  if missing:print('Partial collection; missing: '+', '.join(missing),file=sys.stderr)
  if not records:raise RuntimeError('No complete AirTag rows found; nothing recorded')
- needs_detail=[name for name,loc in records.items() if 'address unavailable' in loc.casefold()]
- if needs_detail:
-  run(real,'scroll',str(sx),str(sy),'200');time.sleep(.4)
-  with tempfile.TemporaryDirectory(prefix='airtag-detail-') as dtmp:
-   for _ in range(25):
-    if not needs_detail:break
-    dimg=pathlib.Path(dtmp)/'detail.png'
-    run('/usr/sbin/screencapture','-x','-o','-l',str(w['windowID']),'-t','png',str(dimg))
-    dsc=struct.unpack('>I',dimg.read_bytes()[16:20])[0]/w['width']
-    draw=json.loads(run(real,'ocr',str(dimg)))
-    for name in list(needs_detail):
-     dcand=next((l for l in draw if canonical.get(l['text'].strip().casefold())==name and 48*dsc<=l['x']<240*dsc),None)
-     if dcand:
-      cx=int(w['x']+(dcand['x']+dcand['width']/2)/dsc);cy=int(w['y']+(dcand['y']+dcand['height']/2)/dsc)
-      exp=expand_detail(name,cx,cy,dimg,w,dsc)
-      if exp:records[name]=exp
-      needs_detail.remove(name)
-    run(real,'scroll',str(sx),str(sy),'-12');time.sleep(.4)
+ from item_details import collect_details
+ collect_details(records,w,run,real,check,find_my_windows,canonical,event)
  # Normalize measured rows into the existing parser's coordinate convention.
  out=[line('People',90,30,80),line('Devices',200,30,90),line('Items',330,30,80)]
  for i,(name,loc) in enumerate(records.items()):

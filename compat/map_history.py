@@ -1,3 +1,4 @@
+from contextlib import closing
 from pathlib import Path
 from datetime import datetime,timedelta,timezone
 import sqlite3,json,math,os,subprocess
@@ -13,7 +14,7 @@ def _cache_db():
  p=DATA/'geocoded-places.sqlite'
  if not p.exists():
   try:
-   with sqlite3.connect(p) as c:
+   with closing(sqlite3.connect(p)) as c, c:
     c.execute('CREATE TABLE IF NOT EXISTS geocoded (label TEXT PRIMARY KEY, lat REAL, lon REAL, precision TEXT, source TEXT)')
   except OSError:pass
  return p
@@ -22,7 +23,7 @@ def _query_cache(label):
  p=DATA/'geocoded-places.sqlite'
  if not p.exists():return False,None
  try:
-  with sqlite3.connect('file:'+str(p)+'?mode=ro',uri=True) as c:
+  with closing(sqlite3.connect('file:'+str(p)+'?mode=ro',uri=True)) as c:
    r=c.execute('SELECT lat,lon,precision,source FROM geocoded WHERE label=?',(label,)).fetchone()
    if r is None:return False,None
    if r[0] is not None and r[1] is not None:
@@ -33,7 +34,7 @@ def _query_cache(label):
 def _save_cache(label,result):
  try:
   p=_cache_db()
-  with sqlite3.connect(p) as c:
+  with closing(sqlite3.connect(p)) as c, c:
    if result:
     c.execute('INSERT OR REPLACE INTO geocoded VALUES (?,?,?,?,?)',(label,result['lat'],result['lon'],result.get('precision',''),result.get('source','')))
    else:
@@ -77,7 +78,7 @@ def locate(label):
  places_db=DATA/'places.sqlite' if (DATA/'places.sqlite').exists() else (BASE/'places.sqlite' if (BASE/'places.sqlite').exists() else None)
  if len(parts)>=2 and places_db:
   try:
-   with sqlite3.connect('file:'+str(places_db)+'?mode=ro',uri=True) as c:
+   with closing(sqlite3.connect('file:'+str(places_db)+'?mode=ro',uri=True)) as c:
     country,region=None,None
     if len(parts)==2 and len(parts[1])==2:country='US';region=parts[1].upper()
     elif len(parts)>=3:
@@ -97,7 +98,8 @@ def locate(label):
  geo=_run_geocoder(clean)
  _save_cache(clean,geo)
  return geo
-def get_history(db,item,period='24h',start=None,end=None,now=None):
+def get_history(db,item,period='24h',start=None,end=None,now=None,kind=None):
+ if kind is not None and kind not in {'items','devices','people'}:raise ValueError('Unknown observation type.')
  now=now or datetime.now(timezone.utc)
  if period=='custom':
   try:
@@ -108,11 +110,13 @@ def get_history(db,item,period='24h',start=None,end=None,now=None):
   lo=now-timedelta(days=RANGES[period]) if RANGES[period] else None;hi=None
  else:raise ValueError('Unknown date range.')
  where=['name=?'];args=[item]
+ if kind is not None:where.append('kind=?');args.append(kind)
+ identity_where=list(where);identity_args=list(args)
  if lo:where.append('julianday(ts)>=julianday(?)');args.append(lo.isoformat())
  if hi:where.append('julianday(ts)<julianday(?)');args.append(hi.isoformat())
- with sqlite3.connect('file:'+str(db)+'?mode=ro',uri=True) as c:
+ with closing(sqlite3.connect('file:'+str(db)+'?mode=ro',uri=True)) as c:
   c.row_factory=sqlite3.Row
   rows=[dict(r) for r in c.execute('select ts,location,staleness from observations where '+' AND '.join(where)+' order by ts,id',args)]
-  first=c.execute('select min(ts) from observations where name=?',(item,)).fetchone()[0]
+  first=c.execute('select min(ts) from observations where '+' AND '.join(identity_where),identity_args).fetchone()[0]
  points={loc:locate(loc) for loc in set(r['location'] for r in rows) if loc}
- return dict(item=item,period=period,rows=rows,places=points,first=first,count=len(rows))
+ return dict(item=item,kind=kind,period=period,rows=rows,places=points,first=first,count=len(rows))

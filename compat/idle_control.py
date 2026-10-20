@@ -58,7 +58,8 @@ def screen_sharing_connected():
  result=snapshot()
  if result is not None:return result
  old=p.stat().st_mtime_ns if p.exists() else 0
- subprocess.run(['/bin/launchctl','kickstart',f'gui/{os.getuid()}/io.tagtracker.sharing-probe'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=5)
+ label=os.environ.get('TAGTRACKER_SHARING_PROBE_LABEL','io.tagtracker.sharing-probe')
+ subprocess.run(['/bin/launchctl','kickstart',f'gui/{os.getuid()}/{label}'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=5)
  for _ in range(SHARING_WAIT*10):
   time.sleep(.1)
   if p.exists() and p.stat().st_mtime_ns!=old:

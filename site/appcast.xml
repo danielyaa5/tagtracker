@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>TagTracker Updates</title>
+        <link>https://danielyaa5.github.io/tagtracker/</link>
+        <description>Signed updates for TagTracker.</description>
+        <language>en</language>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Tue, 20 Oct 2026 15:48:42 -0700</pubDate>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/danielyaa5/tagtracker/releases/download/v0.1.0/TagTracker.zip" length="34168383" type="application/octet-stream" sparkle:edSignature="lUqthuFpqjUtZWVyOXEFzzUt+I5UGlAtlInfbGIHkWcYZg2zBALi8AjcjaiYQBbm5BEpcbxIVUk/cWiwMzAQCA=="/>
+        </item>
+    </channel>
+</rss>

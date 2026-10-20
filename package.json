@@ -1,0 +1,17 @@
+{
+  "name": "tagtracker-dev-tools",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Headless demo capture tools for the TagTracker dashboard",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "media": "node scripts/capture_demo.cjs",
+    "media:install": "playwright install chromium"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

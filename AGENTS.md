@@ -5,7 +5,9 @@ Go collector/browser dashboard with Swift helpers; local history of observations
 - `make build` requires macOS/Swift for helpers. `make test` runs Go tests and Python lifecycle/unit checks; inspect the Makefile for current commands.
 - An observation reflects what Find My displayed, not a fresh GPS fix or a measured route. Preserve stale/unknown-location semantics.
 - Scans interact with the visible Find My app. Preserve idle gating, interruption cleanup, screen-sharing behavior, and user-window ownership.
+- Item detail clicks must use fresh, stable OCR targets and recheck Find My focus and window geometry. Never reuse row coordinates after expanding a card or guess a return-control position. Input and Screen Sharing interruptions must propagate to scan cleanup.
 - A running service is not proof of complete collection. Check freshness, gaps, errors, stored observations, and the rendered UI.
+- Native app dependencies are pinned in `release/prepare.py`; `project.yml` generates the Xcode project. Keep signing credentials and the private Sparkle key outside the repository. Python in the signed bundle must run with bytecode writes disabled.
 - Public demos must use fictional items and public landmarks. Actual locations, item identifiers, databases, and device diagnostics stay private.
 
 ## Working rules

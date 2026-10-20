@@ -12,3 +12,9 @@ jobs:
           go-version: '1.24.x'
       - name: Build and test
         run: make build test
+      - name: Prepare native app dependencies
+        run: |
+          command -v xcodegen || brew install xcodegen
+          python3 release/prepare.py
+      - name: Build native app without distribution credentials
+        run: xcodebuild -project TagTracker.xcodeproj -scheme TagTracker -configuration Release -derivedDataPath .tools/ci-build CODE_SIGNING_ALLOWED=NO build -quiet
