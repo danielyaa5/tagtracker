@@ -8,7 +8,7 @@ GO_BIN := $(BIN)/findmy
 
 all: build
 
-build: helper $(GO_BIN) $(BIN)/idle-probe $(BIN)/close-findmy-window
+build: helper $(GO_BIN) $(BIN)/idle-probe $(BIN)/close-findmy-window $(BIN)/geocoder
 
 helper: $(HELPER_BIN)
 
@@ -24,13 +24,17 @@ clean:
 	rm -rf $(BIN)
 
 install: build
-	cp $(GO_BIN) $(HELPER_BIN) /usr/local/bin/
+	cp $(GO_BIN) $(HELPER_BIN) $(BIN)/geocoder /usr/local/bin/
 
 $(BIN)/idle-probe: helpers/idle-probe/main.swift
 	@mkdir -p $(BIN)
 	swiftc -O -o $@ $<
 
 $(BIN)/close-findmy-window: helpers/close-findmy-window/main.swift
+	@mkdir -p $(BIN)
+	swiftc -O -o $@ $<
+
+$(BIN)/geocoder: helpers/geocoder/main.swift
 	@mkdir -p $(BIN)
 	swiftc -O -o $@ $<
 

@@ -17,3 +17,4 @@ __pycache__/
 item-names.json
 saved-places.json
 .clawpatch/
+dock-launcher/build/

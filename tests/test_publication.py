@@ -23,6 +23,14 @@ class Maps(unittest.TestCase):
  def test_unsafe_coordinates_are_not_mapped(self):
   (self.data/'saved-places.json').write_text('{"Example":{"lat":999,"lon":20}}')
   self.assertIsNone(map_history.locate('Example'))
+ def test_geocoder_and_cache(self):
+  loc=map_history.locate('Barstow, CA')
+  self.assertIsNotNone(loc)
+  self.assertAlmostEqual(loc['lat'],34.8986,places=2)
+  self.assertTrue((self.data/'geocoded-places.sqlite').exists())
+  cached=map_history.locate('Barstow, CA')
+  self.assertEqual(cached['lat'],loc['lat'])
+  self.assertIsNone(map_history.locate('Address unavailable'))
 class Privacy(unittest.TestCase):
  def test_runtime_data_is_outside_checkout(self):
   import runtime
