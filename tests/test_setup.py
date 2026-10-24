@@ -25,6 +25,8 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         job = plistlib.loads((self.agents / 'io.tagtracker.history.plist').read_bytes())
         self.assertEqual(job['ProgramArguments'][0], sys.executable)
+        collector = plistlib.loads((self.agents / 'io.tagtracker.collector.plist').read_bytes())
+        self.assertEqual(collector['ProgramArguments'], [sys.executable, str(ROOT/'compat/scheduled_poll.py')])
         self.assertEqual(job['EnvironmentVariables']['TAGTRACKER_DATA_DIR'], str(self.data))
         self.assertIn(str(Path(sys.executable).parent), job['EnvironmentVariables']['PATH'])
         self.assertEqual(job['EnvironmentVariables']['PYTHONDONTWRITEBYTECODE'], '1')

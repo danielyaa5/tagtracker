@@ -25,7 +25,7 @@ env={'PYTHONDONTWRITEBYTECODE':'1','TAGTRACKER_DATA_DIR':str(DATA),'FINDMY_HISTO
 jobs={
  'io.tagtracker.sharing-probe':{'ProgramArguments':[str(BASE/'compat/screen-sharing-probe')],'StartInterval':30,'ThrottleInterval':1},
  'io.tagtracker.history':{'ProgramArguments':[str(interpreter),str(BASE/'compat/history-server.py')],'KeepAlive':True},
- 'io.tagtracker.collector':{'ProgramArguments':[str(BASE/'bin/findmy'),'items','--json'],'StartInterval':60},
+ 'io.tagtracker.collector':{'ProgramArguments':[str(interpreter),str(BASE/'compat/scheduled_poll.py')],'StartInterval':60},
 }
 a.output.mkdir(parents=True,exist_ok=True)
 for label,job in jobs.items():

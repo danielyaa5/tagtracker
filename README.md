@@ -68,6 +68,8 @@ launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/io.tagtracker.colle
 
 Open **http://127.0.0.1:8768/**. Disconnect Screen Sharing and leave the Mac idle to permit collection. The scheduler checks every minute, but successful scans are spaced about five minutes apart. Confirm a new observation and `window-close-status.json` after the first scan.
 
+Scheduled polls report a normal wait when idle gating, scan spacing or Screen Sharing intentionally pauses collection. Real capture and collection errors still return a failure. The scheduler wrapper requires an explicit acknowledgement from the current collector invocation; a previous scan state cannot turn an unrelated failure into success.
+
 The checkout must stay at the same path while its agents are installed. Port 8768 must be free. Do not run alongside another Find My automation collector. The setup does not import or alter another installation's data.
 
 ## Map configuration

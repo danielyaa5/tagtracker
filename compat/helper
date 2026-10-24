@@ -3,6 +3,7 @@
 import sys,os,subprocess,json,pathlib,tempfile,struct,time,re
 from idle_control import check,acknowledge_automation,finish,read,cleanup_window,fail_scan,record_status,visible_window,remember_window,find_my_windows,event,IdlePause
 from runtime import BASE as base, DATA
+from scheduled_poll import record_pause,record_failure
 real=str(base/'bin/findmy-helper')
 config=json.loads((DATA/'item-names.json').read_text())
 expected=set(config['expected'])
@@ -88,8 +89,10 @@ try:
  print(json.dumps(out,ensure_ascii=False))
 except IdlePause as e:
  cleanup_window()
+ record_pause(e)
  print(str(e),file=sys.stderr);sys.exit(1)
 except Exception as e:
+ record_failure(e)
  # Keep the latest failed OCR evidence; previously only successes were retained.
  if 'raw_pages' in locals():
   try:
