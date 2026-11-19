@@ -32,6 +32,6 @@ Test Sparkle updates using two signed builds on a private test feed before chang
 
 ## Publish a verified build
 
-Create a GitHub release tagged from the tested source commit and attach `TagTracker.dmg` and `TagTracker.zip`. Keep these filenames: the README and website use GitHub's `releases/latest/download/TagTracker.dmg` link. Copy `feed/appcast.xml` into `site/appcast.xml` and commit/push it only after the matching ZIP is accessible. The feed URL is `https://danielyaa5.github.io/tagtracker/appcast.xml`. GitHub Pages deploys the website and feed from `site/` on `main`.
+Create a GitHub release tagged from the tested source commit and attach `TagTracker.dmg` and `TagTracker.zip`. Keep these filenames: the README and website use GitHub's `releases/latest/download/TagTracker.dmg` link. Copy `feed/appcast.xml` into `site/appcast.xml` and commit/push it only after the matching ZIP is accessible. The feed URL is `https://danielyaa5.github.io/tagtracker/appcast.xml`. GitHub Pages deploys the feed from `site/` on `main`; the website lives at https://danielyakobian.com/tagtracker/, and `site/index.html` only forwards there. After regenerating screenshots or demos in `site/assets/`, copy them into `assets/tagtracker/` in the `danielyaa5.github.io` repository (PNG stills as WebP).
 
 Keep older appcast entries when generating the next feed. The release script seeds the generator with the current public appcast. Do not edit signature attributes by hand, move an archive to a different version URL, or replace an archive after generating its signature.

@@ -10,7 +10,7 @@ Sparkle checks for signed updates, and **TagTracker → Check for Updates…** l
 
 ## Screenshots and demo
 
-[Project website](https://danielyaa5.github.io/tagtracker/) · [View the demos](https://danielyaa5.github.io/tagtracker/#demo)
+[Project website](https://danielyakobian.com/tagtracker/) · [View the demos](https://danielyakobian.com/tagtracker/#demo)
 
 All screenshots and the demo use fictional items, devices, and observations at public landmarks.
 

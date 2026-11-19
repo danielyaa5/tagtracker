@@ -1,110 +1,17 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Keep a local history of the places Find My displays for your AirTag items. Free, open-source macOS collector with maps and date filters.">
-  <meta name="theme-color" content="#faf8f3">
-  <meta property="og:title" content="TagTracker — A little history for the things you carry">
-  <meta property="og:description" content="Local item history. A map you can look back on. Free and open source for macOS.">
-  <meta property="og:image" content="https://danielyaa5.github.io/tagtracker/assets/history.png">
-  <meta property="og:type" content="website">
-  <link rel="canonical" href="https://danielyaa5.github.io/tagtracker/">
-  <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "SoftwareApplication",
-      "name": "TagTracker",
-      "description": "Keep a local history of the places Find My displays for your AirTag items. Free, open-source macOS collector with maps and date filters.",
-      "url": "https://danielyaa5.github.io/tagtracker/",
-      "image": "https://danielyaa5.github.io/tagtracker/assets/logo.svg",
-      "screenshot": "https://danielyaa5.github.io/tagtracker/assets/history.png",
-      "applicationCategory": "UtilitiesApplication",
-      "operatingSystem": "macOS 14 or later",
-      "processorRequirements": "Apple silicon",
-      "downloadUrl": "https://github.com/danielyaa5/tagtracker/releases/latest/download/TagTracker.dmg",
-      "license": "https://github.com/danielyaa5/tagtracker/blob/main/LICENSE",
-      "isAccessibleForFree": true,
-      "offers": {
-        "@type": "Offer",
-        "price": "0",
-        "priceCurrency": "USD"
-      },
-      "author": {
-        "@type": "Person",
-        "name": "Daniel Yakobian",
-        "url": "https://danielyakobian.com/"
-      },
-      "sameAs": [
-        "https://github.com/danielyaa5/tagtracker"
-      ]
-    }
-  </script>
-  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css">
-  <title>TagTracker — Location history for your things</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TagTracker has moved</title>
+<!-- This page now lives on danielyakobian.com. GitHub Pages cannot send server redirects,
+     so this page forwards visitors and search engines to the new address, keeping any query or #section. -->
+<link rel="canonical" href="https://danielyakobian.com/tagtracker/">
+<link rel="icon" href="assets/logo.svg">
+<meta http-equiv="refresh" content="0; url=https://danielyakobian.com/tagtracker/">
+<script>location.replace("https://danielyakobian.com/tagtracker/" + location.search + location.hash);</script>
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
-<header class="header wrap">
-  <a class="brand" href="./" aria-label="TagTracker home"><img src="assets/logo.svg" alt="" width="42" height="42"><span>TagTracker</span></a>
-  <nav aria-label="Main navigation"><a href="#demo">Demo</a><a href="#setup">Setup</a><a class="source-link" href="https://github.com/danielyaa5/tagtracker">GitHub <span aria-hidden="true">↗</span></a></nav>
-</header>
-<main id="main">
-<section class="hero wrap">
-  <div class="hero-copy">
-    <p class="eyebrow"><span class="dot" aria-hidden="true"></span> For macOS · Free &amp; open source</p>
-    <h1>A little history for<br>the things you carry.</h1>
-    <p class="lead">Your keys. Your bag. Your next trip. Save the places Find My displays, then look back on a map whenever you need to.</p>
-    <div class="actions"><a class="button primary" href="https://github.com/danielyaa5/tagtracker/releases/latest/download/TagTracker.dmg">Download for macOS <span aria-hidden="true">↗</span></a><a class="button secondary" href="#demo">See it in action <span aria-hidden="true">↓</span></a></div>
-    <p class="release-note">Apple silicon · macOS 14+ · Experimental · Free download</p>
-  </div>
-  <div class="hero-art">
-    <div class="stamp"><img src="assets/logo.svg" width="88" height="88" alt="Orange map pin over stacked maps"></div>
-    <a class="screenshot hero-shot" href="assets/history.png" aria-label="View full location history screenshot"><img src="assets/history.png" alt="TagTracker showing fictional backpack observations on a San Francisco map" width="1200" height="1746" fetchpriority="high"></a>
-    <p class="image-note">Real dashboard. Fictional items and observations.</p>
-  </div>
-</section>
-<section class="features wrap" aria-label="Features">
-  <article><span class="feature-num">01 / KEEP</span><h2>Your history, on your Mac.</h2><p>Observations are saved locally in SQLite. No TagTracker account, Apple-account password, or cloud subscription.</p></article>
-  <article><span class="feature-num">02 / EXPLORE</span><h2>Pick a window in time.</h2><p>See the last day, week, month, or all your saved history. Choose custom dates and fit the map to every displayed pin.</p></article>
-  <article><span class="feature-num">03 / PAUSE</span><h2>Give your work some space.</h2><p>Collection waits for an idle Mac and pauses during macOS Screen Sharing. Find My closes when the scan ends.</p></article>
-</section>
-<section class="demo-section" id="demo">
-  <div class="wrap">
-    <div class="section-heading"><div><p class="eyebrow">TWO QUICK LOOKS</p><h2>Browse history. Explore the map.</h2></div><p>Two short demos of the actual dashboard, captured with fictional items and observations at public landmarks.</p></div>
-    <div class="demo-clips">
-      <figure class="demo-player" data-animation="assets/history-demo.gif" data-poster="assets/history-demo.png" data-title="Browse history"><figcaption><h3>Browse history</h3><p>Select an item and switch between the last day, week, and all time.</p></figcaption><div class="frame-label"><span class="window-dots" aria-hidden="true">● ● ●</span><span>Browse history</span><span class="demo-controls"><button type="button" data-demo-toggle>Pause demo</button><a href="assets/history-demo.gif">Open GIF ↗</a></span></div><picture><source media="(prefers-reduced-motion: reduce)" srcset="assets/history-demo.png"><img src="assets/history-demo.gif" alt="Select a fictional backpack and change its history date range" width="1000" height="667" loading="lazy"></picture></figure>
-      <figure class="demo-player" data-animation="assets/map-demo.gif" data-poster="assets/map-demo.png" data-title="Explore the map"><figcaption><h3>Explore the map</h3><p>Connect timeline points, inspect a pin, and fit every displayed place.</p></figcaption><div class="frame-label"><span class="window-dots" aria-hidden="true">● ● ●</span><span>Explore the map</span><span class="demo-controls"><button type="button" data-demo-toggle>Pause demo</button><a href="assets/map-demo.gif">Open GIF ↗</a></span></div><picture><source media="(prefers-reduced-motion: reduce)" srcset="assets/map-demo.png"><img src="assets/map-demo.gif" alt="Connect map points, inspect a pin, and fit all places" width="1000" height="667" loading="lazy"></picture></figure>
-    </div>
-  </div>
-</section>
-<section class="screenshots wrap" aria-labelledby="screenshots-title">
-  <div class="section-heading"><div><p class="eyebrow">TAKE A CLOSER LOOK</p><h2 id="screenshots-title">The useful details.</h2></div></div>
-  <div class="gallery"><figure><a href="assets/overview.png"><img src="assets/overview.png" alt="Fictional items and devices with their last displayed place, Find My age and recording time" width="1200" height="1080" loading="lazy"></a><figcaption><strong>Your items and devices.</strong><span>See what Find My displayed and when the Mac recorded it.</span></figcaption></figure><figure><a href="assets/history.png"><img src="assets/history.png" alt="Date filter, map pins, and observation table for the fictional Demo backpack" width="1200" height="1746" loading="lazy"></a><figcaption><strong>A history for each one.</strong><span>Filter observations, inspect pins, and read the recorded details.</span></figcaption></figure></div>
-</section>
-<section class="setup-section wrap" id="setup">
-  <div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h2>A Mac. Your items.<br>A few setup steps.</h2><p class="setup-intro">Download the Mac app, drag TagTracker into Applications, and open it there. The installer disk ejects automatically. Choose your items, allow the macOS permissions, and start tracking. Signed updates are delivered with Sparkle.</p><a class="text-link" href="https://github.com/danielyaa5/tagtracker#build-and-setup">Read the setup and source guide <span aria-hidden="true">↗</span></a></div>
-  <div class="setup-card"><div class="code-heading"><span>Start with the source</span><button type="button" id="copy" aria-label="Copy build commands">Copy</button></div><pre><code id="commands">git clone https://github.com/danielyaa5/tagtracker.git
-cd tagtracker
-make build
-python3 scripts/setup.py --item 'Keys' --item 'Backpack'</code></pre><ol><li>Choose your exact Find My item names.</li><li>Grant Accessibility and Screen Recording permissions.</li><li>Load the local services, then open the dashboard.</li></ol><p>The setup guide includes the service commands and removal instructions.</p><p id="copy-status" class="sr-only" role="status"></p></div>
-</section>
-<section class="expectations wrap" aria-labelledby="expectations-title">
-  <div class="expectation-title"><span aria-hidden="true">◎</span><h2 id="expectations-title">A record of what was shown.</h2></div><p>TagTracker reads Find My's visible interface. A saved observation can contain an older location, and gaps are possible. The Mac must stay awake, logged in, and unlocked. Find My opens during a scan.</p><p>Map pins use your saved coordinates or approximate town centers. They aren't GPS fixes or measured routes. History stays local; OpenStreetMap receives requests for the map tiles you view.</p>
-</section>
-<section class="closing wrap"><img src="assets/logo.svg" alt="" width="56" height="56"><h2>Keep the little bits of history.</h2><a class="button primary" href="https://github.com/danielyaa5/tagtracker">Explore TagTracker on GitHub <span aria-hidden="true">↗</span></a></section>
-</main>
-<footer class="footer wrap"><div><a class="brand" href="./">TagTracker</a><p>By <a href="https://danielyakobian.com/">Daniel Yakobian</a> · MIT license</p></div><div><a href="https://github.com/danielyaa5/tagtracker/issues">Report an issue</a><a href="https://github.com/danielyaa5/tagtracker/blob/main/LICENSE">License</a><a href="https://github.com/danielyaa5/tagtracker/blob/main/THIRD_PARTY_NOTICES.md">Credits</a></div><p class="trademark">AirTag is a trademark of Apple Inc. TagTracker is independent and is not affiliated with or endorsed by Apple. All demo items and observations are fictional.</p></footer>
-<script>
-document.querySelectorAll('.demo-player').forEach(figure=>{
- const button=figure.querySelector('[data-demo-toggle]'),image=figure.querySelector('img'),source=figure.querySelector('source');
- let playing=!matchMedia('(prefers-reduced-motion: reduce)').matches;
- function label(){button.textContent=playing?'Pause demo':'Play demo';button.setAttribute('aria-label',`${playing?'Pause':'Play'} ${figure.dataset.title} demo`);}
- label();button.addEventListener('click',()=>{playing=!playing;source.media='not all';image.src=playing?figure.dataset.animation:figure.dataset.poster;label();});
-});
-
-const copy=document.getElementById('copy');copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(document.getElementById('commands').textContent);copy.textContent='Copied';document.getElementById('copy-status').textContent='Build commands copied.';setTimeout(()=>{copy.textContent='Copy'},2000)}catch{document.getElementById('copy-status').textContent='Select the commands and copy them manually.'}});
-</script>
+<p>This page moved to <a href="https://danielyakobian.com/tagtracker/">https://danielyakobian.com/tagtracker/</a>.</p>
 </body>
 </html>
